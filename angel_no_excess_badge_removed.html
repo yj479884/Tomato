@@ -1,0 +1,1221 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>천사 성장 시뮬레이터</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- FontAwesome for Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    /* 눈에 가장 편안하고 세련된 한국어 대표 고딕체 Noto Sans KR 로드 */
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&display=swap');
+    
+    body {
+      font-family: 'Noto Sans KR', sans-serif;
+      /* 고요하고 정적인 밤하늘 딥블루-블랙 그라데이션 */
+      background: radial-gradient(circle at center, #0c1020 0%, #030712 100%);
+      color: #f1f5f9;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* 정적인 별 스타일 (반짝임 및 별똥별 움직이는 효과 차단) */
+    .star {
+      position: absolute;
+      background-color: white;
+      border-radius: 50%;
+      pointer-events: none;
+      opacity: var(--opacity);
+    }
+
+    /* 별이 날아가는 애니메이션 (조작용 인터랙티브 모션은 정중하게 유지) */
+    @keyframes flyStar {
+      0% {
+        transform: translate(0, 0) scale(1) rotate(0deg);
+        opacity: 1;
+      }
+      80% {
+        opacity: 0.8;
+      }
+      100% {
+        transform: translate(var(--tx), var(--ty)) scale(0.3) rotate(360deg);
+        opacity: 0;
+      }
+    }
+
+    .flying-star {
+      position: absolute;
+      pointer-events: none;
+      z-index: 100;
+      animation: flyStar 1s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+    }
+
+    /* 천사 및 항아리 잔잔하게 제자리에 있는 효과 (동적인 둥둥거림 완전 배제) */
+    .floating-angel {
+      transform: translateY(0);
+      transition: transform 0.3s ease;
+    }
+
+    /* 레벨 업그레이드 이펙트 */
+    @keyframes levelUpPulse {
+      0% { transform: scale(1); filter: drop-shadow(0 0 5px rgba(253, 224, 71, 0.5)); }
+      50% { transform: scale(1.15); filter: drop-shadow(0 0 25px rgba(253, 224, 71, 1)); }
+      100% { transform: scale(1); filter: drop-shadow(0 0 5px rgba(253, 224, 71, 0.5)); }
+    }
+
+    .level-up-active {
+      animation: levelUpPulse 0.8s ease-in-out;
+    }
+
+    /* 오라 광채 효과 */
+    .aura-glow {
+      box-shadow: 0 0 30px rgba(147, 51, 234, 0.15);
+      transition: all 0.5s ease;
+    }
+  </style>
+</head>
+<body class="p-4 md:p-8 flex flex-col items-center min-h-screen relative">
+
+  <!-- 별빛 밤하늘 레이어 (정적 별빛만 존재 - 움직임 제거) -->
+  <div id="starry-sky" class="fixed inset-0 overflow-hidden pointer-events-none z-0">
+  </div>
+
+  <!-- 메인 컨텐츠 영역 -->
+  <div class="relative z-10 w-full flex flex-col items-center max-w-[1700px]">
+    
+    <!-- 헤더 영역 -->
+    <header class="text-center mb-8 max-w-2xl w-full">
+      <h1 class="text-4xl md:text-5xl font-black tracking-tight text-yellow-300 mb-2 drop-shadow-[0_4px_10px_rgba(0,0,0,0.8)]">
+        천사 성장 시뮬레이터
+      </h1>
+      <p class="text-sm md:text-base text-purple-200 font-medium drop-shadow-[0_2px_4px_rgba(0,0,0,0.5)]">
+        목표를 향해 전진하여 천사들에게 <b>전신갑주</b>를 입히고 최고의 영광에 도달하게 해주세요!
+      </p>
+    </header>
+
+    <!-- 컨트롤 패널 -->
+    <div class="max-w-4xl w-full flex flex-wrap justify-center gap-3 md:gap-4 mb-8">
+      <!-- 등급표 열기 버튼 -->
+      <button onclick="openGradeModal()" class="flex-1 sm:flex-initial bg-gradient-to-r from-purple-600 to-indigo-600 hover:brightness-110 active:scale-95 text-white font-bold py-3 px-6 rounded-2xl shadow-lg transition flex items-center justify-center gap-2 border border-purple-400/40">
+        <i class="fa-solid fa-shield-halved"></i> 등급표 및 갑주 정보
+      </button>
+      
+      <!-- 되돌리기 버튼 -->
+      <button id="btn-undo" onclick="undoLastAction()" class="flex-1 sm:flex-initial bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-3 px-6 rounded-2xl shadow-lg transition flex items-center justify-center gap-2 border border-slate-600 opacity-50 cursor-not-allowed" disabled>
+        <i class="fa-solid fa-rotate-left"></i> 되돌리기
+      </button>
+      
+      <!-- 전체 초기화 버튼 -->
+      <button onclick="confirmReset()" class="flex-1 sm:flex-initial bg-red-950/80 hover:bg-red-900/90 text-red-200 font-bold py-3 px-6 rounded-2xl shadow-lg transition flex items-center justify-center gap-2 border border-red-800/40">
+        <i class="fa-solid fa-trash-can"></i> 전체 초기화
+      </button>
+    </div>
+
+    <!-- 천사 및 항아리 카드 그리드 시스템 (5열 확장 대응) -->
+    <main class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-6 w-full px-2 mb-8">
+      
+      <!-- 천사 1: 단순 -->
+      <div id="angel-dansun" class="bg-slate-900/80 rounded-3xl border border-blue-500/30 p-5 flex flex-col justify-between aura-glow relative overflow-hidden backdrop-blur-md">
+        
+        <!-- 승급 알림 캡슐 팝업 -->
+        <div id="alert-dansun" class="absolute top-4 left-1/2 transform -translate-x-1/2 -translate-y-4 opacity-0 scale-90 pointer-events-none transition-all duration-500 ease-out z-30 bg-gradient-to-r from-yellow-400 via-amber-300 to-yellow-500 text-slate-950 px-4 py-1.5 rounded-full shadow-[0_4px_15px_rgba(234,179,8,0.4)] border border-yellow-300/30 flex items-center gap-2 whitespace-nowrap text-xs font-black">
+          <span class="animate-bounce">🛡️</span>
+          <span id="alert-msg-dansun">골드 달성!</span>
+          <button onclick="closeCardAlert('dansun')" class="text-slate-950/60 hover:text-slate-950 transition-colors ml-1">
+            <i class="fa-solid fa-xmark text-xs"></i>
+          </button>
+        </div>
+
+        <div>
+          <div class="flex justify-between items-center mb-3">
+            <span class="px-3 py-1 bg-blue-900/50 text-blue-300 rounded-full text-xs font-bold border border-blue-500/20">단순 전도</span>
+            <span class="text-xs text-slate-400 font-semibold">목표: <span class="text-blue-300 font-bold">84,000</span></span>
+          </div>
+          
+          <!-- 천사 이름 머리말 -->
+          <h2 class="text-center text-lg font-bold text-blue-300 mt-2 mb-1">단순 천사</h2>
+          
+          <!-- 천사 그래픽 영역 -->
+          <div class="h-44 flex flex-col justify-center items-center relative mb-4">
+            <div class="floating-angel relative w-32 h-32 flex justify-center items-center" id="img-container-dansun">
+              <!-- 기본 SVG 로딩 뼈대 -->
+            </div>
+            <!-- 등급 배치 배지 -->
+            <div class="absolute bottom-0 bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-bold text-xs px-3 py-1.5 rounded-full shadow-lg border border-blue-400" id="badge-dansun">
+              비기너
+            </div>
+          </div>
+
+          <!-- 수치 데이터 표시 -->
+          <div class="text-center mb-4">
+            <div class="text-3xl font-extrabold text-blue-100 mb-1" id="val-dansun">0</div>
+            <div class="text-xs text-slate-400" id="next-target-container-dansun">다음 등급 목표: -</div>
+          </div>
+
+          <!-- 진행도 바 -->
+          <div class="w-full bg-slate-950 rounded-full h-5 mb-5 overflow-hidden border border-slate-800 relative flex items-center justify-center">
+            <div class="bg-gradient-to-r from-blue-500 to-cyan-400 h-full rounded-full transition-all duration-500 shadow-[0_0_10px_rgba(6,182,212,0.5)] absolute left-0 top-0" id="bar-dansun" style="width: 0%"></div>
+            <span class="text-[10px] font-black text-white z-10 select-none mix-blend-difference" id="pct-dansun">0%</span>
+          </div>
+        </div>
+
+        <!-- 별 채우기 영역 -->
+        <div class="mt-auto space-y-2">
+          <div class="flex justify-center gap-1.5 mb-2">
+            <button onclick="quickAdd('dansun', 1, event)" class="flex-1 bg-blue-900/40 hover:bg-blue-800/60 border border-blue-500/40 text-blue-200 text-xs py-1.5 rounded-xl font-bold transition active:scale-95">+1</button>
+            <button onclick="quickAdd('dansun', 10, event)" class="flex-1 bg-blue-900/40 hover:bg-blue-800/60 border border-blue-500/40 text-blue-200 text-xs py-1.5 rounded-xl font-bold transition active:scale-95">+10</button>
+            <button onclick="quickAdd('dansun', 100, event)" class="flex-1 bg-blue-900/40 hover:bg-blue-800/60 border border-blue-500/40 text-blue-200 text-xs py-1.5 rounded-xl font-bold transition active:scale-95">+100</button>
+          </div>
+
+          <div class="relative flex items-center">
+            <input type="number" id="input-dansun" placeholder="목표값 직접 입력" step="0.1" class="w-full bg-slate-950 border border-blue-500/40 rounded-xl py-2.5 px-3 text-sm focus:outline-none focus:border-blue-400 transition pr-12 text-slate-200" min="0" max="20000" />
+            <button onclick="giveStars('dansun')" id="btn-dansun" class="absolute right-1 bg-yellow-400 hover:bg-yellow-300 text-slate-900 rounded-lg p-2 transition font-bold text-xs flex items-center justify-center">
+              <i class="fa-solid fa-star text-base"></i>
+            </button>
+          </div>
+          <p class="text-[10px] text-slate-500 text-center">퀵 버튼을 누르거나 직접 입력 후 별을 눌러보세요!</p>
+        </div>
+      </div>
+
+      <!-- 천사 2: 유효 -->
+      <div id="angel-yuhyo" class="bg-slate-900/80 rounded-3xl border border-purple-500/30 p-5 flex flex-col justify-between aura-glow relative overflow-hidden backdrop-blur-md">
+        <!-- 승급 알림 캡슐 팝업 -->
+        <div id="alert-yuhyo" class="absolute top-4 left-1/2 transform -translate-x-1/2 -translate-y-4 opacity-0 scale-90 pointer-events-none transition-all duration-500 ease-out z-30 bg-gradient-to-r from-yellow-400 via-amber-300 to-yellow-500 text-slate-950 px-4 py-1.5 rounded-full shadow-[0_4px_15px_rgba(234,179,8,0.4)] border border-yellow-300/30 flex items-center gap-2 whitespace-nowrap text-xs font-black">
+          <span class="animate-bounce">🛡️</span>
+          <span id="alert-msg-yuhyo">골드 달성!</span>
+          <button onclick="closeCardAlert('yuhyo')" class="text-slate-950/60 hover:text-slate-950 transition-colors ml-1">
+            <i class="fa-solid fa-xmark text-xs"></i>
+          </button>
+        </div>
+
+        <div>
+          <div class="flex justify-between items-center mb-3">
+            <span class="px-3 py-1 bg-purple-900/50 text-purple-300 rounded-full text-xs font-bold border border-purple-500/20">유효 전도</span>
+            <span class="text-xs text-slate-400 font-semibold">목표: <span class="text-purple-300 font-bold">728</span></span>
+          </div>
+          
+          <!-- 천사 이름 머리말 -->
+          <h2 class="text-center text-lg font-bold text-purple-300 mt-2 mb-1">유효 천사</h2>
+          
+          <!-- 천사 그래픽 영역 -->
+          <div class="h-44 flex flex-col justify-center items-center relative mb-4">
+            <div class="floating-angel relative w-32 h-32 flex justify-center items-center" id="img-container-yuhyo">
+              <!-- 기본 SVG 로딩 뼈대 -->
+            </div>
+            <div class="absolute bottom-0 bg-gradient-to-r from-purple-600 to-pink-600 text-white font-bold text-xs px-3 py-1.5 rounded-full shadow-lg border border-purple-400" id="badge-yuhyo">
+              비기너
+            </div>
+          </div>
+
+          <!-- 수치 데이터 표시 -->
+          <div class="text-center mb-4">
+            <div class="text-3xl font-extrabold text-purple-100 mb-1" id="val-yuhyo">0</div>
+            <div class="text-xs text-slate-400" id="next-target-container-yuhyo">다음 등급 목표: -</div>
+          </div>
+
+          <!-- 진행도 바 -->
+          <div class="w-full bg-slate-950 rounded-full h-5 mb-5 overflow-hidden border border-slate-800 relative flex items-center justify-center">
+            <div class="bg-gradient-to-r from-purple-500 to-pink-400 h-full rounded-full transition-all duration-500 shadow-[0_0_10px_rgba(236,72,153,0.5)] absolute left-0 top-0" id="bar-yuhyo" style="width: 0%"></div>
+            <span class="text-[10px] font-black text-white z-10 select-none mix-blend-difference" id="pct-yuhyo">0%</span>
+          </div>
+        </div>
+
+        <!-- 별 채우기 영역 -->
+        <div class="mt-auto space-y-2">
+          <div class="flex justify-center gap-1.5 mb-2">
+            <button onclick="quickAdd('yuhyo', 0.3, event)" class="flex-1 bg-purple-900/40 hover:bg-purple-800/60 border border-purple-500/40 text-purple-200 text-xs py-1.5 rounded-xl font-bold transition active:scale-95">+0.3</button>
+            <button onclick="quickAdd('yuhyo', 0.5, event)" class="flex-1 bg-purple-900/40 hover:bg-purple-800/60 border border-purple-500/40 text-purple-200 text-xs py-1.5 rounded-xl font-bold transition active:scale-95">+0.5</button>
+            <button onclick="quickAdd('yuhyo', 1, event)" class="flex-1 bg-purple-900/40 hover:bg-purple-800/60 border border-purple-500/40 text-purple-200 text-xs py-1.5 rounded-xl font-bold transition active:scale-95">+1</button>
+          </div>
+
+          <div class="relative flex items-center">
+            <input type="number" id="input-yuhyo" placeholder="목표값 직접 입력" step="0.1" class="w-full bg-slate-950 border border-purple-500/40 rounded-xl py-2.5 px-3 text-sm focus:outline-none focus:border-purple-400 transition pr-12 text-slate-200" min="0" max="60" />
+            <button onclick="giveStars('yuhyo')" id="btn-yuhyo" class="absolute right-1 bg-yellow-400 hover:bg-yellow-300 text-slate-900 rounded-lg p-2 transition font-bold text-xs flex items-center justify-center">
+              <i class="fa-solid fa-star text-base"></i>
+            </button>
+          </div>
+          <p class="text-[10px] text-slate-500 text-center">퀵 버튼을 누르거나 직접 입력 후 별을 눌러보세요!</p>
+        </div>
+      </div>
+
+      <!-- 천사 3: 침례 -->
+      <div id="angel-chimrye" class="bg-slate-900/80 rounded-3xl border border-pink-500/30 p-5 flex flex-col justify-between aura-glow relative overflow-hidden backdrop-blur-md">
+        <!-- 승급 알림 캡슐 팝업 -->
+        <div id="alert-chimrye" class="absolute top-4 left-1/2 transform -translate-x-1/2 -translate-y-4 opacity-0 scale-90 pointer-events-none transition-all duration-500 ease-out z-30 bg-gradient-to-r from-yellow-400 via-amber-300 to-yellow-500 text-slate-950 px-4 py-1.5 rounded-full shadow-[0_4px_15px_rgba(234,179,8,0.4)] border border-yellow-300/30 flex items-center gap-2 whitespace-nowrap text-xs font-black">
+          <span class="animate-bounce">🛡️</span>
+          <span id="alert-msg-chimrye">골드 달성!</span>
+          <button onclick="closeCardAlert('chimrye')" class="text-slate-950/60 hover:text-slate-950 transition-colors ml-1">
+            <i class="fa-solid fa-xmark text-xs"></i>
+          </button>
+        </div>
+
+        <div>
+          <div class="flex justify-between items-center mb-3">
+            <span class="px-3 py-1 bg-pink-900/50 text-pink-300 rounded-full text-xs font-bold border border-pink-500/20">침례</span>
+            <span class="text-xs text-slate-400 font-semibold">목표: <span class="text-pink-300 font-bold">88</span></span>
+          </div>
+          
+          <!-- 천사 이름 머리말 -->
+          <h2 class="text-center text-lg font-bold text-pink-300 mt-2 mb-1">침례 천사</h2>
+          
+          <!-- 천사 그래픽 영역 -->
+          <div class="h-44 flex flex-col justify-center items-center relative mb-4">
+            <div class="floating-angel relative w-32 h-32 flex justify-center items-center" id="img-container-chimrye">
+              <!-- 기본 SVG 로딩 뼈대 -->
+            </div>
+            <div class="absolute bottom-0 bg-gradient-to-r from-pink-600 to-rose-600 text-white font-bold text-xs px-3 py-1.5 rounded-full shadow-lg border border-pink-400" id="badge-chimrye">
+              비기너
+            </div>
+          </div>
+
+          <!-- 수치 데이터 표시 -->
+          <div class="text-center mb-4">
+            <div class="text-3xl font-extrabold text-pink-100 mb-1" id="val-chimrye">0</div>
+            <div class="text-xs text-slate-400" id="next-target-container-chimrye">다음 등급 목표: -</div>
+          </div>
+
+          <!-- 진행도 바 -->
+          <div class="w-full bg-slate-950 rounded-full h-5 mb-5 overflow-hidden border border-slate-800 relative flex items-center justify-center">
+            <div class="bg-gradient-to-r from-pink-500 to-rose-400 h-full rounded-full transition-all duration-500 shadow-[0_0_10px_rgba(244,63,94,0.5)] absolute left-0 top-0" id="bar-chimrye" style="width: 0%"></div>
+            <span class="text-[10px] font-black text-white z-10 select-none mix-blend-difference" id="pct-chimrye">0%</span>
+          </div>
+        </div>
+
+        <!-- 별 채우기 영역 -->
+        <div class="mt-auto space-y-2">
+          <div class="flex justify-center gap-1.5 mb-2">
+            <button onclick="quickAdd('chimrye', 0.3, event)" class="flex-1 bg-pink-900/40 hover:bg-pink-800/60 border border-pink-500/40 text-pink-200 text-xs py-1.5 rounded-xl font-bold transition active:scale-95">+0.3</button>
+            <button onclick="quickAdd('chimrye', 0.5, event)" class="flex-1 bg-pink-900/40 hover:bg-pink-800/60 border border-pink-500/40 text-pink-200 text-xs py-1.5 rounded-xl font-bold transition active:scale-95">+0.5</button>
+            <button onclick="quickAdd('chimrye', 1, event)" class="flex-1 bg-pink-900/40 hover:bg-pink-800/60 border border-pink-500/40 text-pink-200 text-xs py-1.5 rounded-xl font-bold transition active:scale-95">+1</button>
+          </div>
+
+          <div class="relative flex items-center">
+            <input type="number" id="input-chimrye" placeholder="목표값 직접 입력" step="0.1" class="w-full bg-slate-950 border border-pink-500/40 rounded-xl py-2.5 px-3 text-sm focus:outline-none focus:border-pink-400 transition pr-12 text-slate-200" min="0" max="6" />
+            <button onclick="giveStars('chimrye')" id="btn-chimrye" class="absolute right-1 bg-yellow-400 hover:bg-yellow-300 text-slate-900 rounded-lg p-2 transition font-bold text-xs flex items-center justify-center">
+              <i class="fa-solid fa-star text-base"></i>
+            </button>
+          </div>
+          <p class="text-[10px] text-slate-500 text-center">퀵 버튼을 누르거나 직접 입력 후 별을 눌러보세요!</p>
+        </div>
+      </div>
+
+      <!-- 천사 4: 출석 -->
+      <div id="angel-chulseok" class="bg-slate-900/80 rounded-3xl border border-amber-500/30 p-5 flex flex-col justify-between aura-glow relative overflow-hidden backdrop-blur-md">
+        <!-- 승급 알림 캡슐 팝업 -->
+        <div id="alert-chulseok" class="absolute top-4 left-1/2 transform -translate-x-1/2 -translate-y-4 opacity-0 scale-90 pointer-events-none transition-all duration-500 ease-out z-30 bg-gradient-to-r from-yellow-400 via-amber-300 to-yellow-500 text-slate-950 px-4 py-1.5 rounded-full shadow-[0_4px_15px_rgba(234,179,8,0.4)] border border-yellow-300/30 flex items-center gap-2 whitespace-nowrap text-xs font-black">
+          <span class="animate-bounce">🛡️</span>
+          <span id="alert-msg-chulseok">골드 달성!</span>
+          <button onclick="closeCardAlert('chulseok')" class="text-slate-950/60 hover:text-slate-950 transition-colors ml-1">
+            <i class="fa-solid fa-xmark text-xs"></i>
+          </button>
+        </div>
+
+        <div>
+          <div class="flex justify-between items-center mb-3">
+            <span class="px-3 py-1 bg-amber-900/50 text-amber-300 rounded-full text-xs font-bold border border-amber-500/20">출석</span>
+            <span class="text-xs text-slate-400 font-semibold">목표: <span class="text-amber-300 font-bold">64</span></span>
+          </div>
+          
+          <!-- 천사 이름 머리말 -->
+          <h2 class="text-center text-lg font-bold text-amber-300 mt-2 mb-1">출석 천사</h2>
+          
+          <!-- 천사 그래픽 영역 -->
+          <div class="h-44 flex flex-col justify-center items-center relative mb-4">
+            <div class="floating-angel relative w-32 h-32 flex justify-center items-center" id="img-container-chulseok">
+              <!-- 기본 SVG 로딩 뼈대 -->
+            </div>
+            <div class="absolute bottom-0 bg-gradient-to-r from-amber-600 to-yellow-600 text-white font-bold text-xs px-3 py-1.5 rounded-full shadow-lg border border-amber-400" id="badge-chulseok">
+              비기너
+            </div>
+          </div>
+
+          <!-- 수치 데이터 표시 -->
+          <div class="text-center mb-4">
+            <div class="text-3xl font-extrabold text-amber-100 mb-1" id="val-chulseok">0</div>
+            <div class="text-xs text-slate-400" id="next-target-container-chulseok">다음 등급 목표: -</div>
+          </div>
+
+          <!-- 진행도 바 -->
+          <div class="w-full bg-slate-950 rounded-full h-5 mb-5 overflow-hidden border border-slate-800 relative flex items-center justify-center">
+            <div class="bg-gradient-to-r from-amber-500 to-yellow-400 h-full rounded-full transition-all duration-500 shadow-[0_0_10px_rgba(245,158,11,0.5)] absolute left-0 top-0" id="bar-chulseok" style="width: 0%"></div>
+            <span class="text-[10px] font-black text-white z-10 select-none mix-blend-difference" id="pct-chulseok">0%</span>
+          </div>
+        </div>
+
+        <!-- 별 채우기 영역 -->
+        <div class="mt-auto space-y-2">
+          <div class="flex justify-center gap-1.5 mb-2">
+            <button onclick="quickAdd('chulseok', 0.3, event)" class="flex-1 bg-amber-900/40 hover:bg-amber-800/60 border border-amber-500/40 text-amber-200 text-xs py-1.5 rounded-xl font-bold transition active:scale-95">+0.3</button>
+            <button onclick="quickAdd('chulseok', 0.5, event)" class="flex-1 bg-amber-900/40 hover:bg-amber-800/60 border border-amber-500/40 text-amber-200 text-xs py-1.5 rounded-xl font-bold transition active:scale-95">+0.5</button>
+            <button onclick="quickAdd('chulseok', 1, event)" class="flex-1 bg-amber-900/40 hover:bg-amber-800/60 border border-amber-500/40 text-amber-200 text-xs py-1.5 rounded-xl font-bold transition active:scale-95">+1</button>
+          </div>
+
+          <div class="relative flex items-center">
+            <input type="number" id="input-chulseok" placeholder="목표값 직접 입력" step="0.1" class="w-full bg-slate-950 border border-amber-500/40 rounded-xl py-2.5 px-3 text-sm focus:outline-none focus:border-amber-400 transition pr-12 text-slate-200" min="0" max="6" />
+            <button onclick="giveStars('chulseok')" id="btn-chulseok" class="absolute right-1 bg-yellow-400 hover:bg-yellow-300 text-slate-900 rounded-lg p-2 transition font-bold text-xs flex items-center justify-center">
+              <i class="fa-solid fa-star text-base"></i>
+            </button>
+          </div>
+          <p class="text-[10px] text-slate-500 text-center">퀵 버튼을 누르거나 직접 입력 후 별을 눌러보세요!</p>
+        </div>
+      </div>
+
+      <!-- 천사 5: 온라인선교 항아리 -->
+      <div id="angel-onlinesungyo" class="bg-slate-900/80 rounded-3xl border border-emerald-500/30 p-5 flex flex-col justify-between aura-glow relative overflow-hidden backdrop-blur-md">
+        <div>
+          <div class="flex justify-between items-center mb-3">
+            <span class="px-3 py-1 bg-emerald-900/50 text-emerald-300 rounded-full text-xs font-bold border border-emerald-500/20">온라인선교</span>
+            <!-- 총 목표치 700으로 반영 -->
+            <span class="text-xs text-slate-400 font-semibold">목표: <span class="text-emerald-300 font-bold">45,000</span></span>
+          </div>
+          
+          <!-- 고유 이름 헤더 -->
+          <h2 class="text-center text-lg font-bold text-emerald-300 mt-2 mb-1">온라인 선교 항아리</h2>
+          
+          <!-- 항아리 그래픽 영역 (에메랄드빛 기름이 차오름) -->
+          <div class="h-44 flex flex-col justify-center items-center relative mb-4">
+            <div class="floating-angel relative w-32 h-32 flex justify-center items-center" id="img-container-onlinesungyo">
+              <!-- 기본 SVG 로딩 뼈대 -->
+            </div>
+            <!-- 고정된 항아리 정성 타이틀 배지 (등급 미적용) -->
+            <div class="absolute bottom-0 bg-emerald-950/90 text-emerald-300 font-bold text-xs px-3 py-1.5 rounded-full shadow-lg border border-emerald-500/30" id="badge-onlinesungyo">
+              기름 항아리
+            </div>
+          </div>
+
+          <!-- 수치 데이터 표시 -->
+          <div class="text-center mb-4">
+            <div class="text-3xl font-extrabold text-emerald-100 mb-1" id="val-onlinesungyo">0</div>
+            <!-- 다음 등급 목표 대신 특별 순전 텍스트 적용 -->
+            <div class="text-xs text-slate-400" id="next-target-container-onlinesungyo">가장 순전한 기름을 만드는 정성</div>
+          </div>
+
+          <!-- 진행도 바 -->
+          <div class="w-full bg-slate-950 rounded-full h-5 mb-5 overflow-hidden border border-slate-800 relative flex items-center justify-center">
+            <div class="bg-gradient-to-r from-emerald-500 to-teal-400 h-full rounded-full transition-all duration-500 shadow-[0_0_10px_rgba(16,185,129,0.5)] absolute left-0 top-0" id="bar-onlinesungyo" style="width: 0%"></div>
+            <span class="text-[10px] font-black text-white z-10 select-none mix-blend-difference" id="pct-onlinesungyo">0%</span>
+          </div>
+        </div>
+
+        <!-- 별 채우기 영역 (온라인 선교용 +1, +10 퀵버튼 및 직접 입력창) -->
+        <div class="mt-auto space-y-2">
+          <div class="flex justify-center gap-1.5 mb-2">
+            <button onclick="quickAdd('onlinesungyo', 1, event)" class="flex-1 bg-emerald-900/40 hover:bg-emerald-800/60 border border-emerald-500/40 text-emerald-200 text-xs py-1.5 rounded-xl font-bold transition active:scale-95">+1</button>
+            <button onclick="quickAdd('onlinesungyo', 10, event)" class="flex-1 bg-emerald-900/40 hover:bg-emerald-800/60 border border-emerald-500/40 text-emerald-200 text-xs py-1.5 rounded-xl font-bold transition active:scale-95">+10</button>
+          </div>
+
+          <div class="relative flex items-center">
+            <!-- 최대 범위를 700으로 상향 조정 -->
+            <input type="number" id="input-onlinesungyo" placeholder="목표값 직접 입력" step="0.1" class="w-full bg-slate-950 border border-emerald-500/40 rounded-xl py-2.5 px-3 text-sm focus:outline-none focus:border-emerald-400 transition pr-12 text-slate-200" min="0" max="700" />
+            <button onclick="giveStars('onlinesungyo')" id="btn-onlinesungyo" class="absolute right-1 bg-yellow-400 hover:bg-yellow-300 text-slate-900 rounded-lg p-2 transition font-bold text-xs flex items-center justify-center">
+              <i class="fa-solid fa-star text-base"></i>
+            </button>
+          </div>
+          <p class="text-[10px] text-slate-500 text-center">정성껏 가득 채워 영롱한 기름을 만들어내세요!</p>
+        </div>
+      </div>
+
+    </main>
+
+    </div>
+
+  <!-- 등급표 확인 모달 창 (등급 변경 및 갑주 정보 리뉴얼) -->
+  <div id="grade-modal" class="fixed inset-0 bg-black/90 flex items-center justify-center z-50 opacity-0 pointer-events-none transition-opacity duration-300 px-4">
+    <div class="bg-slate-900 border-2 border-purple-500/50 p-6 rounded-3xl max-w-4xl w-full text-center shadow-[0_0_40px_rgba(147,51,234,0.4)] transform scale-90 transition-transform duration-300 overflow-y-auto max-h-[90vh]" id="grade-modal-content">
+      <h3 class="text-2xl font-bold text-yellow-300 mb-2 flex items-center justify-center gap-2">
+        <i class="fa-solid fa-shield-halved text-xl"></i> 등급표 및 맞춤 전신갑주 정보
+      </h3>
+      <p class="text-xs text-purple-200 mb-6 font-light">목표 달성율 기준에 따라 새로운 전신갑주를 입고 천사가 진화합니다. (선교 항아리 제외)</p>
+      
+      <div class="grid grid-cols-2 md:grid-cols-5 gap-3 text-center text-xs font-semibold mb-6">
+        <div class="p-3 bg-slate-950/60 rounded-xl border border-slate-700 text-slate-300 flex flex-col justify-center">
+          <span class="text-slate-500 text-[10px] font-bold">0% ~ 10%</span>
+          <span class="mt-1 text-sm text-slate-400">비기너</span>
+          <span class="text-[10px] text-slate-500 mt-1 font-normal">가죽 훈련용 갑주</span>
+        </div>
+        <div class="p-3 bg-slate-950/60 rounded-xl border border-amber-800 text-amber-500 flex flex-col justify-center">
+          <span class="text-amber-700 text-[10px] font-bold">11% ~ 20%</span>
+          <span class="mt-1 text-sm text-amber-600">브론즈</span>
+          <span class="text-[10px] text-amber-700 mt-1 font-normal">고대 청동제 갑주</span>
+        </div>
+        <div class="p-3 bg-slate-950/60 rounded-xl border border-slate-400 text-slate-300 flex flex-col justify-center">
+          <span class="text-slate-500 text-[10px] font-bold">21% ~ 30%</span>
+          <span class="mt-1 text-sm text-slate-300">실버</span>
+          <span class="text-[10px] text-slate-400 mt-1 font-normal">기사단 강철 갑주</span>
+        </div>
+        <div class="p-3 bg-slate-950/60 rounded-xl border border-yellow-600 text-yellow-500 flex flex-col justify-center">
+          <span class="text-yellow-700 text-[10px] font-bold">31% ~ 40%</span>
+          <span class="mt-1 text-sm text-yellow-400">골드</span>
+          <span class="text-[10px] text-yellow-600 mt-1 font-normal">신성 황금 판금갑</span>
+        </div>
+        <div class="p-3 bg-slate-950/60 rounded-xl border border-teal-600 text-teal-400 flex flex-col justify-center">
+          <span class="text-teal-600 text-[10px] font-bold">41% ~ 50%</span>
+          <span class="mt-1 text-sm text-teal-300">플래티넘</span>
+          <span class="text-[10px] text-teal-500 mt-1 font-normal">백금 마법 비전갑</span>
+        </div>
+        <div class="p-3 bg-slate-950/60 rounded-xl border border-emerald-600 text-emerald-400 flex flex-col justify-center">
+          <span class="text-emerald-600 text-[10px] font-bold">51% ~ 60%</span>
+          <span class="mt-1 text-sm text-emerald-400">에메랄드</span>
+          <span class="text-[10px] text-emerald-600 mt-1 font-normal">수정 결정 마도갑</span>
+        </div>
+        <div class="p-3 bg-slate-950/60 rounded-xl border border-cyan-500 text-cyan-400 flex flex-col justify-center">
+          <span class="text-cyan-600 text-[10px] font-bold">61% ~ 70%</span>
+          <span class="mt-1 text-sm text-cyan-300">다이아몬드</span>
+          <span class="text-[10px] text-cyan-500 mt-1 font-normal">영롱 금강 수호갑</span>
+        </div>
+        <div class="p-3 bg-slate-950/60 rounded-xl border border-purple-600 text-purple-400 flex flex-col justify-center">
+          <span class="text-purple-600 text-[10px] font-bold">71% ~ 80%</span>
+          <span class="mt-1 text-sm text-purple-300">마스터</span>
+          <span class="text-[10px] text-purple-600 mt-1 font-normal">우주 성운 마스터갑</span>
+        </div>
+        <div class="p-3 bg-slate-950/60 rounded-xl border border-red-600 text-red-400 flex flex-col justify-center">
+          <span class="text-red-600 text-[10px] font-bold">81% ~ 99%</span>
+          <span class="mt-1 text-sm text-red-400">챔피언</span>
+          <span class="text-[10px] text-red-500 mt-1 font-normal">광패 진홍 용린 갑주</span>
+        </div>
+        <div class="p-3 bg-yellow-400/10 rounded-xl border-2 border-yellow-400/40 text-yellow-200 flex flex-col justify-center animate-pulse">
+          <span class="text-yellow-400 text-[10px] font-bold">100% 전승</span>
+          <span class="mt-1 text-sm font-black">😇 천국입성</span>
+          <span class="text-[10px] text-yellow-300 mt-1 font-normal">대천사 신성성갑</span>
+        </div>
+      </div>
+      
+      <button onclick="closeGradeModal()" class="w-full sm:w-1/3 bg-slate-800 text-slate-300 hover:bg-slate-700 font-bold py-2.5 rounded-xl transition">닫기</button>
+    </div>
+  </div>
+
+  
+
+  <!-- 전체 초기화 확인 모달 창 -->
+  <div id="confirm-modal" class="fixed inset-0 bg-black/85 flex items-center justify-center z-50 opacity-0 pointer-events-none transition-opacity duration-300 px-4">
+    <div class="bg-slate-900 border-2 border-red-500/50 p-6 rounded-3xl max-w-sm w-full text-center shadow-[0_0_40px_rgba(239,68,68,0.25)] transform scale-90 transition-transform duration-300" id="confirm-modal-content">
+      <div class="text-5xl mb-4 text-red-500"><i class="fa-solid fa-triangle-exclamation"></i></div>
+      <h3 class="text-xl font-bold text-red-400 mb-2">정말 초기화하시겠습니까?</h3>
+      <p class="text-slate-300 text-xs mb-6 leading-relaxed">모든 천사의 전신갑주 성장 데이터와 기록이 0% 상태로 돌아갑니다. 이 작업은 취소할 수 없습니다.</p>
+      
+      <div class="flex gap-3">
+        <button onclick="closeConfirmModal()" class="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2.5 rounded-xl transition">취소</button>
+        <button onclick="resetAllAngels()" class="flex-1 bg-red-600 hover:bg-red-500 text-white font-bold py-2.5 rounded-xl transition">초기화 진행</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 범용 알림용 모달 (에러/기본 안내 전용) -->
+  <div id="modal" class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 opacity-0 pointer-events-none transition-opacity duration-300 px-4">
+    <div class="bg-slate-900 border-2 border-yellow-400/50 p-6 rounded-2xl max-w-sm w-full text-center shadow-[0_0_30px_rgba(234,179,8,0.3)] transform scale-90 transition-transform duration-300" id="modal-content">
+      <div class="text-5xl mb-3">📢</div>
+      <h3 class="text-2xl font-bold text-yellow-300 mb-2" id="modal-title">알림</h3>
+      <p class="text-slate-200 text-sm mb-5 leading-relaxed" id="modal-msg">안내 메시지입니다.</p>
+      <button onclick="closeModal()" class="w-full bg-gradient-to-r from-yellow-500 to-amber-500 text-slate-950 font-bold py-2.5 rounded-xl hover:brightness-110 active:scale-95 transition">확인</button>
+    </div>
+  </div>
+
+  <script>
+    // 1. 상태 구성 (천사, 항아리, 부스터 데이터 통합)
+    const angels = {
+      dansun: {
+        name: "단순",
+        target: 84000,
+        current: 0,
+        currentGradeIdx: 0,
+        color: "blue",
+        alertTimeout: null
+      },
+      yuhyo: {
+        name: "유효",
+        target: 728,
+        current: 0,
+        currentGradeIdx: 0,
+        color: "purple",
+        alertTimeout: null
+      },
+      chimrye: {
+        name: "침례",
+        target: 88,
+        current: 0,
+        currentGradeIdx: 0,
+        color: "pink", // 침례 천사 컬러 'pink'
+        alertTimeout: null
+      },
+      chulseok: {
+        name: "출석",
+        target: 64,
+        current: 0,
+        currentGradeIdx: 0,
+        color: "amber",
+        alertTimeout: null
+      },
+      onlinesungyo: {
+        name: "온라인선교",
+        target: 45000, // 온라인 선교 항아리 목표치를 700으로 수정
+        current: 0,
+        currentGradeIdx: 0,
+        color: "emerald",
+        alertTimeout: null
+      }
+    };
+
+    // 이전 상태 백업 스택 (되돌리기 구현용)
+    const historyStack = [];
+
+const STORAGE_KEY = 'tomato_growth_autosave_v1';
+
+function saveData(){
+  try{
+    const saveObj = {};
+    Object.keys(angels).forEach(key=>{
+      saveObj[key] = angels[key].current;
+    });
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(saveObj));
+  }catch(e){}
+}
+
+function loadData(){
+  try{
+    const saveObj = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+    Object.keys(saveObj).forEach(key=>{
+      if(angels[key]) angels[key].current = Number(saveObj[key]) || 0;
+    });
+  }catch(e){}
+}
+
+
+    // 2. 10등급 데이터 구성
+    
+
+const GRADES = [
+      { name: "비기너", minPct: 0, style: "bg-slate-700/80 border-slate-500 text-white" },
+      { name: "브론즈", minPct: 11, style: "bg-amber-800/80 border-amber-600 text-amber-100" },
+      { name: "실버", minPct: 21, style: "bg-slate-400/80 border-slate-300 text-slate-900" },
+      { name: "골드", minPct: 31, style: "bg-yellow-600/80 border-yellow-400 text-yellow-100" },
+      { name: "플래티넘", minPct: 41, style: "bg-teal-600/80 border-teal-400 text-teal-100" },
+      { name: "에메랄드", minPct: 51, style: "bg-emerald-600/80 border-emerald-400 text-emerald-100" },
+      { name: "다이아몬드", minPct: 61, style: "bg-cyan-500/80 border-cyan-300 text-cyan-950" },
+      { name: "마스터", minPct: 71, style: "bg-purple-600/80 border-purple-400 text-purple-100" },
+      { name: "챔피언", minPct: 81, style: "bg-red-600/80 border-red-400 text-red-100" },
+      { name: "😇 천국입성", minPct: 100, style: "bg-gradient-to-r from-yellow-400 to-amber-300 border-yellow-300 text-amber-950 animate-pulse font-black" }
+    ];
+
+    // 등급 분기 함수 (경계 가변형)
+    function getGradeIndex(pct) {
+      const roundedPct = Math.floor(pct);
+      if (roundedPct >= 100) return 9; // 천국입성 (100%)
+      if (roundedPct >= 81) return 8;  // 챔피언 (81% ~ 99%)
+      if (roundedPct >= 71) return 7;  // 마스터 (71% ~ 80%)
+      if (roundedPct >= 61) return 6;  // 다이아몬드 (61% ~ 70%)
+      if (roundedPct >= 51) return 5;  // 에메랄드 (51% ~ 60%)
+      if (roundedPct >= 41) return 4;  // 플래티넘 (41% ~ 50%)
+      if (roundedPct >= 31) return 3;  // 골드 (31% ~ 40%)
+      if (roundedPct >= 21) return 2;  // 실버 (21% ~ 30%)
+      if (roundedPct >= 11) return 1;  // 브론즈 (11% ~ 20%)
+      return 0; // 비기너 (0% ~ 10%)
+    }
+
+    // 그래픽 렌더러 분기 함수 (천사 전신갑주 vs 선교 항아리)
+    function getCardGraphicSVG(key, colorClass, pct, scaleClass = "") {
+      const gradeIdx = getGradeIndex(pct);
+
+      if (key === 'onlinesungyo') {
+        // 항아리용 그래픽 리턴 (에메랄드 기름이 차오름)
+        let fillY = 85 - (pct * 0.5); // 0% 일 때 y=85, 100% 일 때 y=35
+        let jarGlow = "rgba(16,185,129,0.4)";
+        let liquidColor = "url(#emeraldOil)";
+        let ropeColor = "#b45309"; // 끈 갈색
+
+        if (pct >= 90) {
+          jarGlow = "rgba(253,224,71,0.9)"; // 가득 찬 경우 거룩한 아우라
+          liquidColor = "url(#holyGoldOil)";
+          ropeColor = "#f59e0b";
+        }
+
+        return `
+          <svg class="w-full h-full text-emerald-400 drop-shadow-[0_0_12px_${jarGlow}] ${scaleClass}" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <clipPath id="jarBodyClip">
+                <path d="M40 35 C22 40, 22 80, 40 85 L60 85 C78 80, 78 40, 60 35 Z"/>
+              </clipPath>
+              <linearGradient id="emeraldOil" x1="0" y1="1" x2="0" y2="0">
+                <stop offset="0%" stop-color="#047857"/>
+                <stop offset="60%" stop-color="#10b981"/>
+                <stop offset="100%" stop-color="#34d399"/>
+              </linearGradient>
+              <linearGradient id="holyGoldOil" x1="0" y1="1" x2="0" y2="0">
+                <stop offset="0%" stop-color="#b45309"/>
+                <stop offset="65%" stop-color="#fbbf24"/>
+                <stop offset="100%" stop-color="#fef08a"/>
+              </linearGradient>
+            </defs>
+            <path d="M35 25 C35 22, 65 22, 65 25 L60 35 L40 35 Z" fill="#334155" stroke="currentColor" stroke-width="2.5"/>
+            <path d="M38 31 C45 34, 55 34, 62 31" stroke="${ropeColor}" stroke-width="3" stroke-linecap="round" />
+            <path d="M40 35 C22 40, 22 80, 40 85 L60 85 C78 80, 78 40, 60 35 Z" fill="#1e293b" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/>
+            
+            <g clip-path="url(#jarBodyClip)">
+              <rect x="10" y="${fillY}" width="80" height="60" fill="${liquidColor}" class="transition-all duration-700"/>
+              <path d="M 20 ${fillY} Q 35 ${fillY - 2.5} 50 ${fillY} T 80 ${fillY}" stroke="${pct >= 90 ? '#fef08a' : '#6ee7b7'}" stroke-width="2" fill="none" class="animate-pulse" />
+            </g>
+            <path d="M30 45 C25 55, 25 70, 32 78" stroke="#ffffff" stroke-width="2" stroke-linecap="round" opacity="0.25"/>
+            <circle cx="68" cy="46" r="3" fill="#ffffff" opacity="0.15" />
+          </svg>
+        `;
+      }
+
+      // --- [천사 전용] 등급 연동 전신갑주 SVG 렌더링 시작 ---
+      let faceDetails = `
+        <path d="M46 35 Q47 37 48 35" stroke="#1e293b" stroke-width="2" stroke-linecap="round"/>
+        <path d="M52 35 Q53 37 54 35" stroke="#1e293b" stroke-width="2" stroke-linecap="round"/>
+        <path d="M48 41 Q50 44 52 41" stroke="#e11d48" stroke-width="2" fill="none" stroke-linecap="round" />
+      `;
+      let glowColor = "rgba(147,197,253,0.5)";
+      let wingColor = "#eff6ff";
+      let haloStyle = 'stroke="#fde047"';
+
+      if (gradeIdx === 9) { // 천국입성 찬란한 날개 및 대폭소 표정 반영
+        glowColor = "rgba(253,224,71,1)";
+        wingColor = "url(#goldGrad)";
+        haloStyle = 'stroke="#fdeb47" stroke-width="5"';
+        
+        // 너무 행복해서 활짝 웃고 있는 눈코입 구현 및 볼터치 효과 제공
+        faceDetails = `
+          <!-- 너무 기뻐서 활짝 감아 웃는 눈 -->
+          <path d="M41 34 Q45 30 49 34" stroke="#1e293b" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+          <path d="M51 34 Q55 30 59 34" stroke="#1e293b" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+          <!-- 입을 크게 벌려 호탕하게 웃는 입 -->
+          <path d="M44 41 Q50 49 56 41 Z" fill="#e11d48" stroke="#1e293b" stroke-width="1.5" stroke-linejoin="round" />
+          <!-- 발그레한 핑크빛 볼터치 -->
+          <ellipse cx="39" cy="38" rx="3.5" ry="2" fill="#fda4af" opacity="0.9" />
+          <ellipse cx="61" cy="38" rx="3.5" ry="2" fill="#fda4af" opacity="0.9" />
+        `;
+      } else if (gradeIdx >= 6) { // 고위 수호 전사 표정
+        faceDetails = `
+          <path d="M45 33 Q47 36 49 33" stroke="#1e293b" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+          <path d="M51 36 L56 32" stroke="#1e293b" stroke-width="2.5" stroke-linecap="round"/>
+          <path d="M46 41 Q50 45 54 41" stroke="#e11d48" stroke-width="2" fill="none" stroke-linecap="round" />
+        `;
+        wingColor = "#ffffff";
+      }
+
+      // 전신갑주 등급별 흉갑 색상 세트
+      const ARMOR_COLORS = [
+        "#7c2d12", // 0: 비기너 (가죽 훈련용)
+        "#9a3412", // 1: 브론즈 (구리빛 청동)
+        "#e2e8f0", // 2: 실버 (단단한 강철 은빛)
+        "#fbbf24", // 3: 골드 (찬란한 황금)
+        "#f1f5f9", // 4: 플래티넘 (광택 백금)
+        "#047857", // 5: 에메랄드 (영롱 수정 비취색)
+        "#0284c7", // 6: 다이아몬드 (신비로운 사파이어 블루)
+        "#4c1d95", // 7: 마스터 (오묘한 성운 밤하늘 퍼플)
+        "#7f1d1d", // 8: 챔피언 (압도적인 투지 진홍빛)
+        "url(#goldGrad)" // 9: 천국입성 (완전한 거룩함의 화이트&골드)
+      ];
+
+      // 어깨 견갑 및 테두리 장식 색상 세트
+      const TRIM_COLORS = [
+        "#9a3412", // 0
+        "#ea580c", // 1
+        "#64748b", // 2
+        "#d97706", // 3
+        "#06b6d4", // 4
+        "#10b981", // 5
+        "#38bdf8", // 6
+        "#ec4899", // 7
+        "#fbbf24", // 8
+        "#ffffff"  // 9
+      ];
+
+      let armorColor = ARMOR_COLORS[gradeIdx];
+      let trimColor = TRIM_COLORS[gradeIdx];
+
+      // [요청 연동] 가슴 흉갑 문양(Crest Emblem) 설계 - 마스터 등급의 영롱한 마름모 스파클 형태로 모두 통일
+      const EMBLEM_COLORS = [
+        "#9a3412", // 0: 비기너 (매칭 브라운)
+        "#ea580c", // 1: 브론즈 (매칭 청동 오렌지)
+        "#475569", // 2: 실버 (매칭 다크 강철)
+        "#d97706", // 3: 골드 (매칭 성화 골드)
+        "#06b6d4", // 4: 플래티넘 (매칭 백금 룬 블루)
+        "#10b981", // 5: 에메랄드 (매칭 비취 에메랄드)
+        "#38bdf8", // 6: 다이아몬드 (매칭 라이트 블루)
+        "#f472b6", // 7: 마스터 (고유 핑크)
+        "#fbbf24", // 8: 챔피언 (진홍 위 골드)
+        "#fbbf24"  // 9: 천국입성 (눈부신 골드)
+      ];
+
+      let emblemColor = EMBLEM_COLORS[gradeIdx];
+      let chestEmblem = `<path d="M50 50 L52 54 L56 56 L52 58 L50 62 L48 58 L44 56 L48 54 Z" fill="${emblemColor}" stroke="#ffffff" stroke-width="1" />`;
+
+      // 어깨 견갑 설계
+      let pauldrons = `
+        <path d="M30 47 C30 38, 43 40, 43 52 Z" fill="${trimColor}" stroke="currentColor" stroke-width="2"/>
+        <path d="M70 47 C70 38, 57 40, 57 52 Z" fill="${trimColor}" stroke="currentColor" stroke-width="2"/>
+      `;
+
+      if (gradeIdx === 8) {
+        pauldrons += `
+          <path d="M27 42 L34 46 L30 48 Z" fill="#fbbf24" stroke="currentColor" stroke-width="1" />
+          <path d="M73 42 L66 46 L70 48 Z" fill="#fbbf24" stroke="currentColor" stroke-width="1" />
+        `;
+      }
+
+      // 투구 및 헬멧/전투관 장착 설계
+      let helmOverlay = "";
+      if (gradeIdx > 0) {
+        const CROWN_COLORS = [
+          "", // 0 (없음)
+          "#b45309", // 1
+          "#94a3b8", // 2
+          "#fbbf24", // 3
+          "#22d3ee", // 4
+          "#10b981", // 5
+          "#38bdf8", // 6
+          "#ec4899", // 7
+          "#991b1b", // 8
+          "url(#goldGrad)" // 9
+        ];
+        let helmColor = CROWN_COLORS[gradeIdx];
+
+        if (gradeIdx === 1 || gradeIdx === 2) {
+          helmOverlay = `
+            <path d="M38 28 Q50 25 62 28 L60 31 Q50 28 40 31 Z" fill="${helmColor}" stroke="currentColor" stroke-width="1.5" />
+            <circle cx="50" cy="27" r="2.5" fill="${trimColor}" stroke="currentColor" stroke-width="1" />
+          `;
+        } else if (gradeIdx >= 3 && gradeIdx <= 5) {
+          helmOverlay = `
+            <path d="M36 28 L40 19 L45 24 L50 14 L55 24 L60 19 L64 28 Z" fill="${helmColor}" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
+            <circle cx="50" cy="23" r="2.5" fill="#ffffff" stroke="currentColor" stroke-width="1" />
+          `;
+        } else if (gradeIdx === 8) {
+          helmOverlay = `
+            <path d="M35 28 L39 12 C35 15, 30 25, 41 24 Z" fill="${helmColor}" stroke="currentColor" stroke-width="1.5" />
+            <path d="M65 28 L61 12 C65 15, 70 25, 59 24 Z" fill="${helmColor}" stroke="currentColor" stroke-width="1.5" />
+            <path d="M38 28 Q50 24 62 28 L60 31 Q50 27 40 31 Z" fill="#1e293b" stroke="currentColor" stroke-width="1.5" />
+          `;
+        } else {
+          helmOverlay = `
+            <path d="M34 28 L38 14 L43 23 L50 8 L57 23 L62 14 L66 28 Z" fill="${helmColor}" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
+            <circle cx="50" cy="21" r="3" fill="#ffffff" class="animate-pulse" />
+          `;
+        }
+      }
+
+      return `
+        <svg class="w-full h-full ${colorClass} drop-shadow-[0_0_12px_${glowColor}] ${scaleClass}" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#fbbf24" />
+              <stop offset="100%" stop-color="#fef08a" />
+            </linearGradient>
+          </defs>
+          
+          <path d="M25 45 C10 35, 5 60, 30 55" stroke="currentColor" stroke-width="4" stroke-linecap="round" fill="${wingColor}" />
+          <path d="M75 45 C90 35, 95 60, 70 55" stroke="currentColor" stroke-width="4" stroke-linecap="round" fill="${wingColor}" />
+          
+          <circle cx="50" cy="35" r="12" fill="#fed7aa" stroke="currentColor" stroke-width="3" />
+          <path d="M38 32 C45 23, 55 23, 62 32" stroke="#eab308" stroke-width="4" stroke-linecap="round"/>
+          
+          <path d="M35 75 L42 47 L58 47 L65 75 Z" fill="${armorColor}" stroke="currentColor" stroke-width="3" stroke-linejoin="round" />
+          ${chestEmblem}
+          ${pauldrons}
+          <path d="M38.5 66 L61.5 66" stroke="${trimColor}" stroke-width="2" stroke-linecap="round" />
+          ${helmOverlay}
+          ${faceDetails}
+        </svg>
+      `;
+    }
+
+    // 밤하늘을 수놓는 정적인 별빛 생성 함수 (움직임 제거 정적 유지)
+    function generateStarrySky() {
+      const sky = document.getElementById('starry-sky');
+      const starCount = 100;
+      for (let i = 0; i < starCount; i++) {
+        const star = document.createElement('div');
+        star.className = 'star';
+        const size = Math.random() * 2 + 0.6;
+        star.style.width = `${size}px`;
+        star.style.height = `${size}px`;
+        star.style.left = `${Math.random() * 100}%`;
+        star.style.top = `${Math.random() * 100}%`;
+
+        star.style.setProperty('--opacity', `${Math.random() * 0.7 + 0.3}`);
+
+        const colors = ['#ffffff', '#ffffff', '#e0f2fe', '#fef08a'];
+        star.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)];
+
+        if (size > 1.8) {
+          star.style.boxShadow = `0 0 ${size * 1.5}px ${star.style.backgroundColor}`;
+        }
+        sky.appendChild(star);
+      }
+    }
+
+    // 되돌리기 활성/비활성 제어
+    function updateUndoButtonState() {
+      const btn = document.getElementById("btn-undo");
+      if (historyStack.length > 0) {
+        btn.removeAttribute("disabled");
+        btn.classList.remove("opacity-50", "cursor-not-allowed");
+      } else {
+        btn.setAttribute("disabled", "true");
+        btn.classList.add("opacity-50", "cursor-not-allowed");
+      }
+    }
+
+    // 직전 액션으로 복구 (되돌리기)
+    function undoLastAction() {
+      if (historyStack.length === 0) return;
+      const prevState = historyStack.pop();
+      for (const key in prevState) {
+        angels[key].current = prevState[key].current;
+        angels[key].currentGradeIdx = prevState[key].currentGradeIdx;
+        closeCardAlert(key);
+        updateAngelState(key, true);
+      }
+      updateUndoButtonState();
+    
+saveData();
+}
+
+    // 퀵 별추가 조작 함수
+    function quickAdd(angelKey, amount, event) {
+      const angel = angels[angelKey];
+      
+      saveStateToHistory();
+
+      let newValue = Math.round((angel.current + amount) * 10) / 10;
+
+      angel.current = newValue;
+
+      const btnRect = event.currentTarget.getBoundingClientRect();
+      const container = document.getElementById(`img-container-${angelKey}`) || document.getElementById(`bar-${angelKey}`);
+      const containerRect = container.getBoundingClientRect();
+
+      const starCount = 6;
+      for (let i = 0; i < starCount; i++) {
+        createFlyingStar(btnRect, containerRect, i, starCount);
+      }
+
+      setTimeout(() => {
+        updateAngelState(angelKey);
+      }, 700);
+    
+saveData();
+}
+
+    // 직접 입력창 별 전송 및 모션 효과 실행
+    function giveStars(angelKey) {
+      const angel = angels[angelKey];
+      const inputEl = document.getElementById(`input-${angelKey}`);
+      let inputValue = parseFloat(inputEl.value);
+
+      if (isNaN(inputValue) || inputValue < 0) {
+        showCustomAlert("⚠️ 오류", "올바른 양수 값을 입력해 주세요.");
+        return;
+      }
+
+      inputValue = Math.round(inputValue * 10) / 10;
+
+      saveStateToHistory();
+
+      // 직접 입력값을 기존 값에 누적
+      angel.current += inputValue;
+
+      const btn = document.getElementById(`btn-${angelKey}`);
+      const container = document.getElementById(`img-container-${angelKey}`) || document.getElementById(`bar-${angelKey}`);
+      
+      const btnRect = btn.getBoundingClientRect();
+      const containerRect = container.getBoundingClientRect();
+
+      const starCount = 8;
+      for (let i = 0; i < starCount; i++) {
+        createFlyingStar(btnRect, containerRect, i, starCount);
+      }
+
+      setTimeout(() => {
+        updateAngelState(angelKey);
+      }, 700);
+
+      inputEl.value = "";
+    
+saveData();
+}
+
+    // 날아가는 별 물리 효과 형성
+    function createFlyingStar(btnRect, destRect, index, total) {
+      const star = document.createElement('div');
+      star.className = 'flying-star';
+      star.innerHTML = '⭐';
+      star.style.fontSize = `${Math.random() * 12 + 12}px`;
+      
+      const startX = btnRect.left + btnRect.width / 2 + window.scrollX;
+      const startY = btnRect.top + btnRect.height / 2 + window.scrollY;
+      
+      star.style.left = `${startX}px`;
+      star.style.top = `${startY}px`;
+
+      const destX = destRect.left + destRect.width / 2 + window.scrollX;
+      const destY = destRect.top + destRect.height / 2 + window.scrollY;
+
+      const offsetX = (Math.random() - 0.5) * 40;
+      const offsetY = (Math.random() - 0.5) * 40;
+
+      const targetX = (destX + offsetX) - startX;
+      const targetY = (destY + offsetY) - startY;
+
+      star.style.setProperty('--tx', `${targetX}px`);
+      star.style.setProperty('--ty', `${targetY}px`);
+
+      star.style.animationDelay = `${index * 0.05}s`;
+
+      document.body.appendChild(star);
+
+      star.addEventListener('animationend', () => {
+        star.remove();
+      });
+    }
+
+    // 천사, 항아리, 부스터 성장 계산 및 UI 업데이트
+    function updateAngelState(angelKey, silent = false) {
+      const angel = angels[angelKey];
+      const pct = (angel.current / angel.target) * 100;
+      const roundedPct = Math.floor(pct);
+
+      const pctEl = document.getElementById(`pct-${angelKey}`);
+      const valEl = document.getElementById(`val-${angelKey}`);
+      const barEl = document.getElementById(`bar-${angelKey}`);
+      const imgContainer = document.getElementById(`img-container-${angelKey}`);
+      const nextTargetContainer = document.getElementById(`next-target-container-${angelKey}`);
+
+      valEl.innerText = Number(angel.current.toFixed(1)).toLocaleString(undefined, {
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 1
+      });
+      
+
+      pctEl.innerText = `${roundedPct}%`;
+      barEl.style.width = `${roundedPct}%`;
+
+      // [온라인선교 항아리] 업데이트 처리
+      if (angelKey === 'onlinesungyo') {
+        if (roundedPct < 100) {
+          nextTargetContainer.innerHTML = `<span class="text-emerald-300 font-bold"><i class="fa-solid fa-droplet animate-pulse"></i> 가장 순전한 기름을 만드는 정성</span>`;
+        } else {
+          nextTargetContainer.innerHTML = `<span class="text-yellow-300 font-bold"><i class="fa-solid fa-wand-magic-sparkles"></i> 순전한 기름이 완성되었습니다!</span>`;
+        }
+        
+        imgContainer.innerHTML = getCardGraphicSVG(angelKey, "text-emerald-300", roundedPct, "");
+        
+        const cardEl = document.getElementById(`angel-${angelKey}`);
+        if (roundedPct >= 90) {
+          cardEl.className = "bg-slate-900/90 rounded-3xl border-2 border-yellow-400/80 p-5 flex flex-col justify-between aura-glow relative overflow-hidden backdrop-blur-md shadow-[0_0_20px_rgba(234,179,8,0.3)]";
+        } else {
+          cardEl.className = "bg-slate-900/80 rounded-3xl border border-emerald-500/30 p-5 flex flex-col justify-between aura-glow relative overflow-hidden backdrop-blur-md";
+        }
+        return;
+      }
+
+      // [천사 캐릭터 전용] 10단계 등급 계산 및 다음 목표 연산
+      let gradeIdx = getGradeIndex(pct);
+
+      const currentGrade = GRADES[gradeIdx];
+      const isLevelUp = gradeIdx > angel.currentGradeIdx;
+      
+      const prevGradeIdx = angel.currentGradeIdx;
+      angel.currentGradeIdx = gradeIdx;
+
+      const badgeEl = document.getElementById(`badge-${angelKey}`);
+
+      if (gradeIdx < 9) {
+        const nextGrade = GRADES[gradeIdx + 1];
+        const nextTargetValue = Math.round((angel.target * (nextGrade.minPct / 100)) * 10) / 10;
+        
+        nextTargetContainer.innerHTML = `다음 등급(${nextGrade.name}) 목표: <span class="text-${angel.color}-300 font-bold">${nextTargetValue.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 1 })}</span>`;
+      } else {
+        nextTargetContainer.innerHTML = `<span class="text-yellow-300 font-bold"><i class="fa-solid fa-crown"></i> 최고 단계 완료!</span>`;
+      }
+
+      // 배지 갱신
+      badgeEl.innerText = currentGrade.name;
+      badgeEl.className = `absolute bottom-0 text-xs px-3 py-1.5 rounded-full shadow-lg border transition-all duration-300 ${currentGrade.style}`;
+
+      // 갑주 색상 테마
+      let colorClass = `text-${angel.color}-300`;
+      if (gradeIdx === 9) {
+        colorClass = "text-yellow-300";
+      }
+      
+      let scaleClass = (isLevelUp && !silent) ? "level-up-active" : "";
+      imgContainer.innerHTML = getCardGraphicSVG(angelKey, colorClass, roundedPct, scaleClass);
+
+      // 전체 카드 테두리 분위기 연출
+      const cardEl = document.getElementById(`angel-${angelKey}`);
+      if (gradeIdx === 9) {
+        cardEl.className = "bg-slate-900/90 rounded-3xl border-2 border-yellow-400/80 p-5 flex flex-col justify-between aura-glow relative overflow-hidden backdrop-blur-md shadow-[0_0_20px_rgba(234,179,8,0.3)]";
+      } else {
+        cardEl.className = `bg-slate-900/80 rounded-3xl border border-${angel.color}-500/30 p-5 flex flex-col justify-between aura-glow relative overflow-hidden backdrop-blur-md`;
+      }
+
+      // 승급 알림
+      if (isLevelUp && !silent) {
+        playLevelUpEffect(angelKey, prevGradeIdx, gradeIdx);
+      }
+    }
+
+    // 카드 내부 상단 중앙에서 둥글게 떴다가 사라지는 캡슐 팝업
+    function playLevelUpEffect(angelKey, oldIdx, newIdx) {
+      const angel = angels[angelKey];
+      const newGrade = GRADES[newIdx].name;
+      const alertEl = document.getElementById(`alert-${angelKey}`);
+      const alertMsgEl = document.getElementById(`alert-msg-${angelKey}`);
+
+      if (!alertEl || !alertMsgEl) return;
+
+      let msg = `${newGrade} 달성!`;
+      if (newIdx === 9) {
+        msg = `😇 천국입성 대성공! 🎉`;
+      }
+
+      alertMsgEl.innerHTML = msg;
+
+      alertEl.classList.remove("-translate-y-4", "opacity-0", "scale-90", "pointer-events-none");
+      alertEl.classList.add("translate-y-0", "opacity-100", "scale-100");
+
+      if (angel.alertTimeout) {
+        clearTimeout(angel.alertTimeout);
+      }
+      angel.alertTimeout = setTimeout(() => {
+        closeCardAlert(angelKey);
+      }, 5000);
+    }
+
+    // 개별 카드 승급 배너 닫기
+    function closeCardAlert(angelKey) {
+      const alertEl = document.getElementById(`alert-${angelKey}`);
+      if (alertEl) {
+        alertEl.classList.remove("translate-y-0", "opacity-100", "scale-100");
+        alertEl.classList.add("-translate-y-4", "opacity-0", "scale-90", "pointer-events-none");
+      }
+    }
+
+    // 모달창 범용 함수들
+    function showCustomAlert(title, message, icon = "📢") {
+      const modal = document.getElementById("modal");
+      const modalContent = document.getElementById("modal-content");
+      const modalTitle = document.getElementById("modal-title");
+      const modalMsg = document.getElementById("modal-msg");
+      const modalIcon = modalContent.querySelector(".text-5xl");
+
+      if (modalIcon) modalIcon.innerText = icon;
+      if (modalTitle) modalTitle.innerHTML = title;
+      if (modalMsg) modalMsg.innerHTML = message;
+
+      modal.classList.remove("opacity-0", "pointer-events-none");
+      modalContent.classList.remove("scale-90");
+    }
+
+    // 알림 닫기
+    function closeModal() {
+      const modal = document.getElementById("modal");
+      const modalContent = document.getElementById("modal-content");
+
+      modal.classList.add("opacity-0", "pointer-events-none");
+      modalContent.classList.add("scale-90");
+    }
+
+    // 등급표 모달 제어
+    function openGradeModal() {
+      const modal = document.getElementById("grade-modal");
+      const modalContent = document.getElementById("grade-modal-content");
+      modal.classList.remove("opacity-0", "pointer-events-none");
+      modalContent.classList.remove("scale-90");
+    }
+
+    // 등급표 모달 닫기
+    function closeGradeModal() {
+      const modal = document.getElementById("grade-modal");
+      const modalContent = document.getElementById("grade-modal-content");
+      modal.classList.add("opacity-0", "pointer-events-none");
+      modalContent.classList.add("scale-90");
+    }
+
+    // 부스터 사용법 모달 제어
+    function openBoosterHowtoModal() {
+      const modal = document.getElementById("booster-howto-modal");
+      const modalContent = document.getElementById("booster-howto-content");
+      modal.classList.remove("opacity-0", "pointer-events-none");
+      modalContent.classList.remove("scale-90");
+    }
+
+    // 부스터 사용법 모달 닫기
+    function closeBoosterHowtoModal() {
+      const modal = document.getElementById("booster-howto-modal");
+      const modalContent = document.getElementById("booster-howto-content");
+      modal.classList.add("opacity-0", "pointer-events-none");
+      modalContent.classList.add("scale-90");
+    }
+
+    // 초기화 동의 모달 제어
+    function confirmReset() {
+      const modal = document.getElementById("confirm-modal");
+      const modalContent = document.getElementById("confirm-modal-content");
+      modal.classList.remove("opacity-0", "pointer-events-none");
+      modalContent.classList.remove("scale-90");
+    }
+
+    function closeConfirmModal() {
+      const modal = document.getElementById("confirm-modal");
+      const modalContent = document.getElementById("confirm-modal-content");
+      modal.classList.add("opacity-0", "pointer-events-none");
+      modalContent.classList.add("scale-90");
+    }
+
+    // 전체 초기화 수행
+    function resetAllAngels() {
+      closeConfirmModal();
+      
+      for (const key in angels) {
+        angels[key].current = 0;
+        angels[key].currentGradeIdx = 0;
+        closeCardAlert(key);
+        updateAngelState(key, true);
+      }
+
+      historyStack.length = 0;
+      updateUndoButtonState();
+
+      showCustomAlert("초기화 완료", "모든 천사의 데이터와 성갑이 초기 상태로 정화되었습니다.", "🔄");
+    
+saveData();
+}
+
+    // 히스토리 상태 백업 함수
+    function saveStateToHistory() {
+      const stateBackup = {};
+      for (const key in angels) {
+        stateBackup[key] = {
+          current: angels[key].current,
+          currentGradeIdx: angels[key].currentGradeIdx
+        };
+      }
+      historyStack.push(stateBackup);
+      if (historyStack.length > 20) {
+        historyStack.shift();
+      }
+      updateUndoButtonState();
+    }
+
+    // 초기 실행
+    window.onload = function() {
+      loadData();
+      
+      generateStarrySky(); // 별빛 밤하늘 백그라운드 형성
+      
+      updateAngelState('dansun');
+      updateAngelState('yuhyo');
+      updateAngelState('chimrye');
+      updateAngelState('chulseok');
+      updateAngelState('onlinesungyo');
+      updateAngelState('booster'); // 부스터 상태 초기 렌더링
+    };
+  </script>
+</body>
+</html>
