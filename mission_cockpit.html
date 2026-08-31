@@ -1,0 +1,1472 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>선교 항공기 통합 계기판 (Global Mission Cockpit)</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- React & ReactDOM CDN -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <!-- Babel Standalone for JSX compilation -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Lucide Icons CDN -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    @keyframes spin-slow {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    .animate-spin-slow {
+      animation: spin-slow 12s linear infinite;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 antialiased selection:bg-cyan-500 selection:text-slate-950">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo } = React;
+
+    // Helper to render Lucide Icons in standalone React
+    const LucideIcon = ({ name, size = 16, className = "", style = {} }) => {
+      const containerRef = React.useRef(null);
+
+      React.useEffect(() => {
+        if (containerRef.current && window.lucide) {
+          const iconPascalToKebab = name
+            .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+            .replace(/([A-Z])([A-Z][a-z])/g, '$1-$2')
+            .toLowerCase();
+          
+          containerRef.current.innerHTML = `<i data-lucide="${iconPascalToKebab}" style="width: ${size}px; height: ${size}px;"></i>`;
+          window.lucide.createIcons({
+            root: containerRef.current
+          });
+        }
+      }, [name, size, className]);
+
+      return <span ref={containerRef} className={`inline-flex items-center justify-center ${className}`} style={{ width: size, height: size, ...style }} />;
+    };
+
+    // Cockpit Audio Synthesizer (Web Audio API)
+    const playCockpitBeep = (type = 'click') => {
+      try {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContext) return;
+        const ctx = new AudioContext();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+
+        if (type === 'click') {
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(800, ctx.currentTime);
+          osc.frequency.exponentialRampToValueAtTime(1200, ctx.currentTime + 0.05);
+          gain.gain.setValueAtTime(0.15, ctx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.05);
+          osc.start();
+          osc.stop(ctx.currentTime + 0.05);
+        } else if (type === 'heavy') {
+          osc.type = 'triangle';
+          osc.frequency.setValueAtTime(440, ctx.currentTime);
+          osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.12);
+          gain.gain.setValueAtTime(0.25, ctx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.12);
+          osc.start();
+          osc.stop(ctx.currentTime + 0.12);
+        } else if (type === 'heaven') {
+          [523.25, 659.25, 783.99, 1046.50].forEach((freq, i) => {
+            const chordOsc = ctx.createOscillator();
+            const chordGain = ctx.createGain();
+            chordOsc.connect(chordGain);
+            chordGain.connect(ctx.destination);
+            chordOsc.type = 'sine';
+            chordOsc.frequency.setValueAtTime(freq, ctx.currentTime + i * 0.08);
+            chordGain.gain.setValueAtTime(0.15, ctx.currentTime + i * 0.08);
+            chordGain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.2);
+            chordOsc.start(ctx.currentTime + i * 0.08);
+            chordOsc.stop(ctx.currentTime + 1.2);
+          });
+        }
+      } catch (e) {}
+    };
+
+    // Continent Flight Path Database
+    const CONTINENT_TIERS = [
+      {
+        id: "heaven",
+        minPercent: 100,
+        name: "천국 입성 (Heaven Entry)",
+        subtitle: "MISSION COMPLETE • 영원한 본향",
+        region: "새 하늘과 새 땅 / 모든 선교의 완성",
+        coordinates: "77.7777° N, 77.7777° E (HEAVEN)",
+        nextWayPoint: "면류관 수여 및 영광의 보좌",
+        flightLevel: "FL990 (Celestial Glory)",
+        color: "#f59e0b",
+        isHeaven: true,
+      },
+      {
+        id: "europe",
+        minPercent: 90,
+        name: "유럽 대륙 (Europe)",
+        subtitle: "EUROPE CONTINENT",
+        region: "서유럽 & 지중해 / 로마 및 알프스 상공",
+        coordinates: "41.9028° N, 12.4964° E",
+        nextWayPoint: "천국 입성 게이트 (100% 달성)",
+        flightLevel: "FL410 (41,000 ft)",
+        color: "#a855f7",
+        isHeaven: false,
+      },
+      {
+        id: "north_america",
+        minPercent: 80,
+        name: "북아메리카 대륙 (North America)",
+        subtitle: "NORTH AMERICA CONTINENT",
+        region: "북미 대륙 / 뉴욕 및 대서양 관제권",
+        coordinates: "40.7128° N, 74.0060° W",
+        nextWayPoint: "유럽 대륙 (90% 목표)",
+        flightLevel: "FL400 (40,000 ft)",
+        color: "#ec4899",
+        isHeaven: false,
+      },
+      {
+        id: "south_america",
+        minPercent: 60,
+        name: "남아메리카 대륙 (South America)",
+        subtitle: "SOUTH AMERICA CONTINENT",
+        region: "남미 대륙 / 아마존 및 안데스 상공",
+        coordinates: "15.7975° S, 47.8919° W",
+        nextWayPoint: "북아메리카 대륙 (80% 목표)",
+        flightLevel: "FL390 (39,000 ft)",
+        color: "#3b82f6",
+        isHeaven: false,
+      },
+      {
+        id: "africa",
+        minPercent: 40,
+        name: "아프리카 대륙 (Africa)",
+        subtitle: "AFRICA CONTINENT",
+        region: "아프리카 대륙 / 나이로비 & 사하라 상공",
+        coordinates: "1.2921° S, 36.8219° E",
+        nextWayPoint: "남아메리카 대륙 (60% 목표)",
+        flightLevel: "FL380 (38,000 ft)",
+        color: "#eab308",
+        isHeaven: false,
+      },
+      {
+        id: "oceania",
+        minPercent: 20,
+        name: "오세아니아 대륙 (Oceania)",
+        subtitle: "OCEANIA CONTINENT",
+        region: "남태평양 / 시드니 & 폴리네시아 상공",
+        coordinates: "33.8688° S, 151.2093° E",
+        nextWayPoint: "아프리카 대륙 (40% 목표)",
+        flightLevel: "FL370 (37,000 ft)",
+        color: "#10b981",
+        isHeaven: false,
+      },
+      {
+        id: "asia",
+        minPercent: 10,
+        name: "아시아 대륙 (Asia)",
+        subtitle: "ASIA CONTINENT",
+        region: "동아시아 / 서울 및 유라시아 회랑",
+        coordinates: "37.5665° N, 126.9780° E",
+        nextWayPoint: "오세아니아 대륙 (20% 목표)",
+        flightLevel: "FL350 (35,000 ft)",
+        color: "#06b6d4",
+        isHeaven: false,
+      },
+      {
+        id: "base",
+        minPercent: 0,
+        name: "본부 기지 (Departure Base)",
+        subtitle: "PRE-FLIGHT STAGING",
+        region: "출항 준비 구역 / 엔진 스타트 완료",
+        coordinates: "37.4485° N, 126.4512° E (ICN)",
+        nextWayPoint: "아시아 대륙 항로 (10% 달성 시)",
+        flightLevel: "FL100 (10,000 ft)",
+        color: "#94a3b8",
+        isHeaven: false,
+      }
+    ];
+
+    // 1. Semi-Circular Instrument Dial Component (전도 계기판)
+    const SemiCircleGauge = ({ 
+      title, 
+      subtitle, 
+      value, 
+      target, 
+      color, 
+      unit = "건", 
+      iconName = "gauge",
+      quickSteps = [1, 5, 10],
+      onAdd,
+      onReset
+    }) => {
+      const [inputVal, setInputVal] = useState('');
+      
+      const rawPercentage = target > 0 ? (value / target) * 100 : 0;
+      const clampedPercentage = Math.min(100, Math.max(0, rawPercentage));
+
+      const handleQuickAdd = (amount) => {
+        onAdd(amount);
+      };
+
+      const handleCustomSubmit = (e) => {
+        e.preventDefault();
+        const num = parseInt(inputVal, 10);
+        if (!isNaN(num) && num > 0) {
+          onAdd(num);
+          setInputVal('');
+        }
+      };
+
+      const cx = 100;
+      const cy = 95;
+      const r = 70;
+      const arcTotalLength = Math.PI * r;
+
+      return (
+        <div className="bg-slate-900/95 border border-slate-700/80 rounded-2xl p-3.5 flex flex-col items-center justify-between shadow-xl relative overflow-hidden backdrop-blur-md group hover:border-slate-500/80 transition-all duration-300">
+          <div className="absolute top-1 left-1 w-2 h-2 border-t-2 border-l-2 border-slate-600"></div>
+          <div className="absolute top-1 right-1 w-2 h-2 border-t-2 border-r-2 border-slate-600"></div>
+          <div className="absolute bottom-1 left-1 w-2 h-2 border-b-2 border-l-2 border-slate-600"></div>
+          <div className="absolute bottom-1 right-1 w-2 h-2 border-b-2 border-r-2 border-slate-600"></div>
+
+          <div className="w-full flex items-center justify-between mb-1">
+            <div className="flex items-center gap-2">
+              <div className="p-1.5 rounded-lg bg-slate-800/90 text-white shadow-inner flex items-center justify-center" style={{ color: color }}>
+                <LucideIcon name={iconName} size={15} />
+              </div>
+              <div>
+                <h4 className="text-xs sm:text-sm font-bold text-slate-100 tracking-wide">{title}</h4>
+                <span className="text-[9px] text-slate-400 font-mono tracking-tight block">{subtitle}</span>
+              </div>
+            </div>
+            
+            <div className="flex items-center gap-2">
+              <div className="text-right font-mono">
+                <div className="text-xs font-bold" style={{ color }}>{rawPercentage.toFixed(1)}%</div>
+                <div className="text-[9px] text-slate-500">목표: {target.toLocaleString()}</div>
+              </div>
+              <button
+                onClick={onReset}
+                title={`${title} 0으로 초기화`}
+                className="p-1.5 rounded-lg bg-slate-800/80 hover:bg-red-950/70 text-slate-400 hover:text-red-400 border border-slate-700 hover:border-red-700/60 transition-all active:scale-90 flex items-center justify-center"
+              >
+                <LucideIcon name="rotate-ccw" size={12} />
+              </button>
+            </div>
+          </div>
+
+          <div className="relative w-full max-w-[210px] h-28 flex items-end justify-center my-1 select-none overflow-hidden">
+            <svg viewBox="0 0 200 115" className="w-full h-full">
+              <defs>
+                <linearGradient id={`grad-${title}`} x1="0%" y1="0%" x2="100%" y2="0%">
+                  <stop offset="0%" stopColor="#1e293b" />
+                  <stop offset="30%" stopColor={color} />
+                  <stop offset="100%" stopColor="#ffffff" />
+                </linearGradient>
+
+                <filter id={`glow-${title}`} x="-20%" y="-20%" width="140%" height="140%">
+                  <feGaussianBlur stdDeviation="3" result="blur" />
+                  <feComposite in="SourceGraphic" in2="blur" operator="over" />
+                </filter>
+              </defs>
+
+              <path
+                d={`M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}`}
+                fill="none"
+                stroke="#1e293b"
+                strokeWidth="14"
+                strokeLinecap="round"
+              />
+
+              {[0, 25, 50, 75, 100].map((tickPercent) => {
+                const rad = Math.PI - (tickPercent / 100) * Math.PI;
+                const x1 = cx + (r + 7) * Math.cos(rad);
+                const y1 = cy - (r + 7) * Math.sin(rad);
+                const x2 = cx + (r - 7) * Math.cos(rad);
+                const y2 = cy - (r - 7) * Math.sin(rad);
+                return (
+                  <line
+                    key={tickPercent}
+                    x1={x1}
+                    y1={y1}
+                    x2={x2}
+                    y2={y2}
+                    stroke="#475569"
+                    strokeWidth={tickPercent % 50 === 0 ? "2" : "1.2"}
+                  />
+                );
+              })}
+
+              <path
+                d={`M ${cx - r} ${cy} A ${r} ${r} 0 0 1 ${cx + r} ${cy}`}
+                fill="none"
+                stroke={`url(#grad-${title})`}
+                strokeWidth="12"
+                strokeLinecap="round"
+                strokeDasharray={arcTotalLength}
+                strokeDashoffset={arcTotalLength - (arcTotalLength * clampedPercentage) / 100}
+                className="transition-all duration-700 ease-out"
+                filter={`url(#glow-${title})`}
+              />
+
+              <circle cx={cx} cy={cy} r="14" fill="#0f172a" stroke="#475569" strokeWidth="2.5" />
+              <circle cx={cx} cy={cy} r="8" fill="#1e293b" />
+              <circle cx={cx} cy={cy} r="4" fill={color} />
+              <circle cx={cx} cy={cy} r="1.5" fill="#ffffff" />
+            </svg>
+
+            <div className="absolute bottom-0 flex flex-col items-center pointer-events-none">
+              <span className="font-mono text-base sm:text-lg font-black text-white tracking-wider drop-shadow">
+                {value.toLocaleString()}
+                <span className="text-[10px] text-slate-400 font-normal ml-0.5">{unit}</span>
+              </span>
+            </div>
+          </div>
+
+          <div className="w-full mt-2 pt-2 border-t border-slate-800/90 flex flex-col gap-1.5">
+            <div className="grid grid-cols-3 gap-1">
+              {quickSteps.map((amt) => (
+                <button
+                  key={amt}
+                  onClick={() => handleQuickAdd(amt)}
+                  className="py-1 px-1 text-[11px] font-mono font-bold rounded bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white active:scale-95 transition-all border border-slate-700/60 shadow-sm flex items-center justify-center gap-0.5"
+                >
+                  <LucideIcon name="plus" size={10} className="text-emerald-400" />
+                  <span>{amt >= 1000 ? `${amt / 1000}k` : amt}</span>
+                </button>
+              ))}
+            </div>
+
+            <form onSubmit={handleCustomSubmit} className="flex gap-1">
+              <input
+                type="number"
+                min="1"
+                placeholder="숫자 입력"
+                value={inputVal}
+                onChange={(e) => setInputVal(e.target.value)}
+                className="w-full bg-slate-950/90 text-xs font-mono text-slate-100 placeholder-slate-600 px-2 py-1 rounded border border-slate-700 focus:outline-none focus:border-cyan-500 transition-all"
+              />
+              <button
+                type="submit"
+                className="px-2.5 py-1 bg-cyan-600 hover:bg-cyan-500 active:bg-cyan-700 text-slate-950 font-bold text-xs rounded transition-all shrink-0"
+              >
+                누적
+              </button>
+            </form>
+          </div>
+        </div>
+      );
+    };
+
+    // 2. Airspeed Tape / Vertical Bar Gauge Component
+    const SpeedometerBar = ({ value, target, onAdd, onReset, onUndo, canUndo }) => {
+      const [inputVal, setInputVal] = useState('');
+      const percentage = Math.min(100, Math.max(0, (value / target) * 100));
+      const machNumber = (value / 1500).toFixed(2);
+
+      const handleCustomSubmit = (e) => {
+        e.preventDefault();
+        const num = parseInt(inputVal, 10);
+        if (!isNaN(num) && num > 0) {
+          onAdd(num);
+          setInputVal('');
+        }
+      };
+
+      return (
+        <div className="bg-slate-900/95 border border-slate-700/80 rounded-2xl p-4 flex flex-col justify-between shadow-2xl relative overflow-hidden backdrop-blur-md h-full">
+          <div className="flex items-center justify-between border-b border-slate-800 pb-2 mb-2">
+            <div className="flex items-center gap-2">
+              <div className="p-1.5 rounded-lg bg-orange-500/20 text-orange-400 border border-orange-500/30 flex items-center justify-center">
+                <LucideIcon name="zap" size={17} />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-white tracking-wide">온라인 선교 속도계</h3>
+                <span className="text-[10px] text-orange-400/90 font-mono">AIRSPEED TAPE INDICATOR</span>
+              </div>
+            </div>
+            
+            <div className="flex items-center gap-1.5">
+              <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-orange-950/80 text-orange-400 border border-orange-800/60">
+                MACH {machNumber}
+              </span>
+              <button
+                onClick={onUndo}
+                disabled={!canUndo}
+                title="온라인 선교 속도계 직전 상태로 되돌리기"
+                className={`px-2 py-1 rounded-lg border text-[10px] font-mono flex items-center gap-1 transition-all active:scale-95 ${
+                  canUndo
+                    ? 'bg-slate-800/80 hover:bg-orange-950/70 text-orange-300 border-orange-700/60'
+                    : 'bg-slate-900/40 text-slate-600 border-slate-800 cursor-not-allowed opacity-50'
+                }`}
+              >
+                <LucideIcon name="undo-2" size={11} />
+                <span>되돌리기</span>
+              </button>
+              <button
+                onClick={onReset}
+                title="온라인 선교 속력 초기화"
+                className="px-2 py-1 rounded-lg bg-slate-800/80 hover:bg-red-950/70 text-slate-400 hover:text-red-400 border border-slate-700 hover:border-red-700/60 text-[10px] font-mono flex items-center gap-1 transition-all active:scale-95"
+              >
+                <LucideIcon name="rotate-ccw" size={11} />
+                <span>초기화</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="flex-1 flex gap-3 items-center justify-center py-2">
+            <div className="flex flex-col justify-between h-52 text-[10px] font-mono text-slate-500 text-right select-none py-1">
+              <span>{target.toLocaleString()}</span>
+              <span>{(target * 0.75).toLocaleString()}</span>
+              <span>{(target * 0.5).toLocaleString()}</span>
+              <span>{(target * 0.25).toLocaleString()}</span>
+              <span>0</span>
+            </div>
+
+            <div className="relative w-14 h-52 bg-slate-950 rounded-lg p-1 border-2 border-slate-700 shadow-inner flex flex-col justify-end overflow-hidden">
+              <div className="absolute inset-0 flex flex-col justify-between p-1 pointer-events-none z-10 opacity-30">
+                {Array.from({ length: 11 }).map((_, i) => (
+                  <div key={i} className="w-full h-px bg-white"></div>
+                ))}
+              </div>
+
+              <div
+                className="w-full rounded bg-gradient-to-t from-amber-600 via-orange-500 to-yellow-400 transition-all duration-700 ease-out shadow-[0_0_15px_rgba(249,115,22,0.6)] relative"
+                style={{ height: `${percentage}%` }}
+              >
+                <div className="absolute top-0 left-0 right-0 h-1.5 bg-white/90 rounded-t shadow-[0_0_8px_#ffffff]"></div>
+              </div>
+            </div>
+
+            <div className="flex flex-col justify-center gap-2">
+              <div className="bg-slate-950/90 border border-orange-500/40 rounded-xl p-2.5 shadow-lg">
+                <span className="text-[9px] font-mono text-slate-400 block uppercase">누적 온라인 선교</span>
+                <div className="text-xl font-black font-mono text-orange-400 tracking-wider">
+                  {value.toLocaleString()}
+                  <span className="text-xs text-slate-300 font-sans ml-1">KTS</span>
+                </div>
+                <div className="text-[10px] font-mono text-emerald-400 mt-0.5 flex items-center gap-1">
+                  <LucideIcon name="activity" size={11} />
+                  <span>달성률: {percentage.toFixed(1)}%</span>
+                </div>
+              </div>
+
+              <div className="bg-slate-800/50 rounded-lg p-2 text-[10px] font-mono text-slate-300 border border-slate-700/50">
+                <div className="flex justify-between">
+                  <span className="text-slate-500">목표 기준</span>
+                  <span className="text-orange-400 font-bold">{target.toLocaleString()} 건</span>
+                </div>
+                <div className="flex justify-between mt-1">
+                  <span className="text-slate-500">추력 상태</span>
+                  <span className="text-cyan-400">{percentage >= 100 ? "MAX CRUISE" : "ACCELERATING"}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="border-t border-slate-800 pt-2.5 flex flex-col gap-1.5">
+            <div className="grid grid-cols-4 gap-1">
+              {[50, 100, 250, 500].map((amt) => (
+                <button
+                  key={amt}
+                  onClick={() => onAdd(amt)}
+                  className="py-1 px-1 font-mono text-xs font-bold rounded bg-slate-800 hover:bg-orange-600/30 text-orange-200 hover:text-white border border-slate-700 hover:border-orange-500 active:scale-95 transition-all flex items-center justify-center gap-0.5"
+                >
+                  <LucideIcon name="plus" size={10} className="text-orange-400" />
+                  <span>{amt}</span>
+                </button>
+              ))}
+            </div>
+
+            <form onSubmit={handleCustomSubmit} className="flex gap-1">
+              <input
+                type="number"
+                min="1"
+                placeholder="선교량 누적 입력"
+                value={inputVal}
+                onChange={(e) => setInputVal(e.target.value)}
+                className="w-full bg-slate-950 text-xs font-mono text-slate-100 placeholder-slate-600 px-2 py-1 rounded border border-slate-700 focus:outline-none focus:border-orange-500"
+              />
+              <button
+                type="submit"
+                className="px-3 py-1 bg-orange-600 hover:bg-orange-500 active:bg-orange-700 text-slate-950 font-bold text-xs rounded transition-all shrink-0"
+              >
+                가속 +
+              </button>
+            </form>
+          </div>
+        </div>
+      );
+    };
+
+    // 3. Fuel Tank / Vertical Bar Gauge Component
+    const PRAYER_FOCUS_TOPICS = [
+      "전도의 사명 모두가 감당하여 여청년목표 달성하도록 간구",
+      "마음밭을 기경하여 여청년부터 따뜻한 교회를 만들 수 있도록 간구",
+      "초막절 성령을 힘입어 넉넉한 등과 기름을 준비할 수 있도록 간구",
+      "잃은양 또는 연결자를 위한 집중기도"
+    ];
+
+    const FuelGaugeBar = ({ value, target, onAdd, onReset, onUndo, canUndo, soundEnabled }) => {
+      const [inputVal, setInputVal] = useState('');
+      const [showTopicsModal, setShowTopicsModal] = useState(false);
+      const percentage = Math.min(100, Math.max(0, (value / target) * 100));
+
+      const handleCustomSubmit = (e) => {
+        e.preventDefault();
+        const num = parseInt(inputVal, 10);
+        if (!isNaN(num) && num > 0) {
+          onAdd(num);
+          setInputVal('');
+        }
+      };
+
+      return (
+        <div className="bg-slate-900/95 border border-slate-700/80 rounded-2xl p-4 flex flex-col justify-between shadow-2xl relative overflow-hidden backdrop-blur-md h-full">
+          <div className="flex items-center justify-between border-b border-slate-800 pb-2 mb-2">
+            <div className="flex items-center gap-2">
+              <div className="p-1.5 rounded-lg bg-purple-500/20 text-purple-400 border border-purple-500/30 flex items-center justify-center">
+                <LucideIcon name="flame" size={17} />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-white tracking-wide">기도 연료 게이지</h3>
+                <span className="text-[10px] text-purple-400/90 font-mono">EICAS FUEL TOTALIZER</span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setShowTopicsModal(!showTopicsModal)}
+                title="기도 상세 열기"
+                className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-mono font-bold bg-purple-950/90 hover:bg-purple-900/80 text-purple-200 border border-purple-700/70 transition-all shadow-sm active:scale-95"
+              >
+                <LucideIcon name="book-open" size={11} className="text-purple-300" />
+                <span>기도 상세</span>
+              </button>
+              <button
+                onClick={onUndo}
+                disabled={!canUndo}
+                title="기도 연료 직전 상태로 되돌리기"
+                className={`px-2 py-1 rounded-lg border text-[10px] font-mono flex items-center gap-1 transition-all active:scale-90 ${
+                  canUndo
+                    ? 'bg-slate-800/80 hover:bg-purple-950/70 text-purple-300 border-purple-700/60'
+                    : 'bg-slate-900/40 text-slate-600 border-slate-800 cursor-not-allowed opacity-50'
+                }`}
+              >
+                <LucideIcon name="undo-2" size={11} />
+                <span>되돌리기</span>
+              </button>
+              <button
+                onClick={onReset}
+                title="기도 연료 초기화"
+                className="px-2 py-1 rounded-lg bg-slate-800/80 hover:bg-red-950/70 text-slate-400 hover:text-red-400 border border-slate-700 hover:border-red-700/60 text-[10px] font-mono flex items-center gap-1 transition-all active:scale-90"
+              >
+                <LucideIcon name="rotate-ccw" size={11} />
+                <span>초기화</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="flex-1 flex gap-3 items-center justify-center py-3">
+            <div className="flex flex-col justify-between h-52 text-[10px] font-mono text-slate-500 text-right select-none py-1">
+              <span>{target.toLocaleString()}</span>
+              <span>{(target * 0.75).toLocaleString()}</span>
+              <span>{(target * 0.5).toLocaleString()}</span>
+              <span>{(target * 0.25).toLocaleString()}</span>
+              <span>0</span>
+            </div>
+
+            <div className="relative w-14 h-52 bg-slate-950 rounded-lg p-1 border-2 border-slate-700 shadow-inner flex flex-col justify-end overflow-hidden">
+              <div className="absolute inset-0 flex flex-col justify-between p-1 pointer-events-none z-10 opacity-30">
+                {Array.from({ length: 11 }).map((_, i) => (
+                  <div key={i} className="w-full h-px bg-white"></div>
+                ))}
+              </div>
+
+              <div
+                className="w-full rounded bg-gradient-to-t from-indigo-600 via-purple-600 to-fuchsia-400 transition-all duration-700 ease-out shadow-[0_0_18px_rgba(168,85,247,0.6)] relative"
+                style={{ height: `${percentage}%` }}
+              >
+                <div className="absolute top-0 left-0 right-0 h-1.5 bg-fuchsia-200/90 rounded-t shadow-[0_0_10px_#f0abfc]"></div>
+              </div>
+            </div>
+
+            <div className="flex flex-col justify-center gap-2.5 flex-1 max-w-[155px]">
+              <div className="bg-slate-950/90 border border-purple-500/40 rounded-xl p-3 shadow-lg">
+                <span className="text-[9px] font-mono text-slate-400 block uppercase">누적 기도 횟수</span>
+                <div className="text-xl font-black font-mono text-purple-300 tracking-wider">
+                  {value.toLocaleString()}
+                  <span className="text-xs text-slate-400 font-sans ml-1">회</span>
+                </div>
+                <div className="text-[10px] font-mono text-indigo-300 mt-1 flex items-center gap-1">
+                  <LucideIcon name="shield-check" size={11} />
+                  <span>연료 충전율: {percentage.toFixed(1)}%</span>
+                </div>
+              </div>
+
+              <div className="bg-slate-800/50 rounded-lg p-2 text-[10px] font-mono text-slate-300 border border-slate-700/50">
+                <div className="flex justify-between">
+                  <span className="text-slate-500">목표 기준</span>
+                  <span className="text-purple-300 font-bold">{target.toLocaleString()} 회</span>
+                </div>
+                <div className="flex justify-between mt-1">
+                  <span className="text-slate-500">연료 상태</span>
+                  <span className={percentage > 30 ? "text-emerald-400 font-bold" : "text-amber-400 font-bold animate-pulse"}>
+                    {percentage >= 100 ? "FULL TANK" : percentage > 30 ? "OPTIMAL" : "LOW FUEL"}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="border-t border-slate-800 pt-2.5 flex flex-col gap-1.5">
+            <div className="grid grid-cols-4 gap-1">
+              {[10, 50, 100, 300].map((amt) => (
+                <button
+                  key={amt}
+                  onClick={() => onAdd(amt)}
+                  className="py-1 px-1 font-mono text-xs font-bold rounded bg-slate-800 hover:bg-purple-600/30 text-purple-200 hover:text-white border border-slate-700 hover:border-purple-500 active:scale-95 transition-all flex items-center justify-center gap-0.5"
+                >
+                  <LucideIcon name="plus" size={10} className="text-purple-400" />
+                  <span>{amt}회</span>
+                </button>
+              ))}
+            </div>
+
+            <form onSubmit={handleCustomSubmit} className="flex gap-1">
+              <input
+                type="number"
+                min="1"
+                placeholder="기도 횟수(회) 누적 입력"
+                value={inputVal}
+                onChange={(e) => setInputVal(e.target.value)}
+                className="w-full bg-slate-950 text-xs font-mono text-slate-100 placeholder-slate-600 px-2 py-1 rounded border border-slate-700 focus:outline-none focus:border-purple-500"
+              />
+              <button
+                type="submit"
+                className="px-3 py-1 bg-purple-600 hover:bg-purple-500 active:bg-purple-700 text-white font-bold text-xs rounded transition-all shrink-0"
+              >
+                주유 +
+              </button>
+            </form>
+          </div>
+
+          {showTopicsModal && (
+            <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+              <div className="bg-slate-900 border border-purple-500/60 rounded-2xl p-5 w-full max-w-md shadow-2xl">
+                <div className="flex items-center justify-between border-purple-900/60 pb-3 mb-3 border-b">
+                  <div className="flex items-center gap-2 text-purple-300">
+                    <LucideIcon name="heart-handshake" size={20} className="text-purple-400" />
+                    <h3 className="text-base font-bold text-white font-mono">여청년 기도 상세 (Prayer Details)</h3>
+                  </div>
+                  <button
+                    onClick={() => setShowTopicsModal(false)}
+                    className="text-slate-400 hover:text-white text-base font-mono font-bold"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <div className="p-3 bg-purple-950/60 border border-purple-700/60 rounded-xl text-center font-bold text-xs sm:text-sm text-purple-200 flex items-center justify-center gap-1.5 mb-3 shadow-inner">
+                  <LucideIcon name="sparkles" size={15} className="text-purple-400" />
+                  <span>기도로 비행기를 가속시켜주세요! ✈️</span>
+                </div>
+
+                <div className="space-y-2.5 my-2">
+                  {PRAYER_FOCUS_TOPICS.map((topic, i) => (
+                    <div key={i} className="flex items-start gap-2.5 p-3 rounded-xl bg-slate-950/90 border border-purple-900/50">
+                      <LucideIcon name="check-circle-2" size={16} className="text-purple-400 shrink-0 mt-0.5" />
+                      <p className="text-xs text-slate-100 font-medium leading-relaxed">{topic}</p>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="pt-3 border-t border-slate-800 flex justify-center">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowTopicsModal(false);
+                      if (soundEnabled) playCockpitBeep('click');
+                    }}
+                    className="w-full py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 active:scale-95 text-white font-bold text-xs transition-all shadow flex items-center justify-center gap-1.5"
+                  >
+                    <LucideIcon name="heart-handshake" size={15} />
+                    <span>기도로 동참하기</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    };
+
+    // 4. TOP POSITIONED: Panoramic Globe & Fixed Stable Aircraft View
+    const TopPanoramicGlobeViewer = ({ currentProgress, selectedContinentId }) => {
+      const currentTier = useMemo(() => {
+        if (selectedContinentId && selectedContinentId !== 'auto') {
+          const found = CONTINENT_TIERS.find((t) => t.id === selectedContinentId);
+          if (found) return found;
+        }
+        return CONTINENT_TIERS.find((tier) => currentProgress >= tier.minPercent) || CONTINENT_TIERS[CONTINENT_TIERS.length - 1];
+      }, [currentProgress, selectedContinentId]);
+
+      return (
+        <div className="w-full bg-slate-900/95 border border-slate-700/80 rounded-3xl p-4 sm:p-5 shadow-2xl relative overflow-hidden backdrop-blur-md mb-4">
+          <div className="flex flex-wrap items-center justify-between border-b border-slate-800/80 pb-2.5 mb-3 gap-2">
+            <div className="flex items-center gap-2.5">
+              <div className="p-1.5 rounded-xl bg-cyan-500/20 text-cyan-400 border border-cyan-500/30 flex items-center justify-center">
+                {currentTier.isHeaven ? <LucideIcon name="sparkles" size={18} className="text-amber-400 animate-spin-slow" /> : <LucideIcon name="globe-2" size={18} />}
+              </div>
+              <div>
+                <h3 className="text-sm sm:text-base font-bold text-white tracking-wide flex items-center gap-2">
+                  지구 상공 비행 뷰 (Global Orbital Orbit)
+                  {currentTier.isHeaven ? (
+                    <span className="px-2 py-0.5 text-[10px] font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 rounded-full animate-pulse flex items-center gap-1">
+                      <LucideIcon name="crown" size={12} /> GLORY ARRIVED
+                    </span>
+                  ) : (
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                  )}
+                </h3>
+                <span className="text-[10px] text-cyan-400/90 font-mono">
+                  STABLE ORBITAL LOCK • {selectedContinentId === 'auto' ? '자동 항법 추적 모드' : '수동 지정 항법 모드'}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 font-mono">
+              <span className="px-2.5 py-1 text-xs font-bold bg-slate-950/90 text-cyan-300 border border-cyan-500/40 rounded-lg flex items-center gap-1.5 shadow">
+                <LucideIcon name="crosshair" size={13} className="text-cyan-400" />
+                종합 비행 달성률: <strong className="text-white font-black">{currentProgress.toFixed(1)}%</strong>
+              </span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
+            <div className="md:col-span-5 relative h-40 sm:h-44 flex items-center justify-center overflow-hidden rounded-2xl bg-slate-950/80 border border-slate-800">
+              <div className="absolute inset-0 bg-[radial-gradient(#334155_1px,transparent_1px)] [background-size:12px_12px] opacity-40"></div>
+              <div className="absolute w-56 h-28 border border-dashed border-cyan-500/40 rounded-[50%] transform -rotate-12 pointer-events-none opacity-70"></div>
+
+              <div className={`relative w-28 h-28 sm:w-32 sm:h-32 rounded-full border-2 transition-all duration-700 flex items-center justify-center overflow-hidden ${
+                currentTier.isHeaven 
+                  ? 'bg-gradient-to-tr from-amber-950 via-yellow-900 to-amber-600 border-amber-400/80 shadow-[0_0_40px_rgba(245,158,11,0.6)]' 
+                  : 'bg-gradient-to-tr from-slate-900 via-blue-950 to-cyan-900 border-cyan-500/40 shadow-[0_0_35px_rgba(6,182,212,0.35)]'
+              }`}>
+                <svg className="w-full h-full opacity-60" viewBox="0 0 100 100">
+                  <circle cx="50" cy="50" r="48" fill="none" stroke="#0ea5e9" strokeWidth="0.8" strokeDasharray="3 3" />
+                  <ellipse cx="50" cy="50" rx="46" ry="24" fill="none" stroke="#38bdf8" strokeWidth="0.8" />
+                  <ellipse cx="50" cy="50" rx="24" ry="46" fill="none" stroke="#38bdf8" strokeWidth="0.8" />
+                  <line x1="50" y1="2" x2="50" y2="98" stroke="#38bdf8" strokeWidth="0.8" />
+                  <line x1="2" y1="50" x2="98" y2="50" stroke="#38bdf8" strokeWidth="0.8" />
+                  <path d="M 25 35 Q 38 25 45 40 T 40 60 Q 30 65 25 50 Z" fill={currentTier.isHeaven ? "#f59e0b" : "#059669"} opacity="0.4" />
+                  <path d="M 55 25 Q 70 30 75 45 T 60 70 Q 50 60 55 40 Z" fill={currentTier.isHeaven ? "#f59e0b" : "#059669"} opacity="0.4" />
+                  <path d="M 65 65 Q 80 60 85 75 T 70 85 Z" fill={currentTier.isHeaven ? "#f59e0b" : "#059669"} opacity="0.4" />
+                </svg>
+                <div className="absolute inset-0 rounded-full shadow-[inset_0_0_15px_rgba(34,211,238,0.4)] pointer-events-none"></div>
+              </div>
+
+              <div className="absolute z-20 flex flex-col items-center transform -translate-y-3 translate-x-4">
+                <div className="relative">
+                  <div className={`p-2.5 rounded-full border shadow-xl text-white transition-all flex items-center justify-center ${
+                    currentTier.isHeaven 
+                      ? 'bg-slate-900 border-amber-400 shadow-[0_0_25px_rgba(245,158,11,0.9)]' 
+                      : 'bg-slate-900/90 border-cyan-400 shadow-[0_0_20px_rgba(6,182,212,0.8)]'
+                  }`}>
+                    {currentTier.isHeaven ? (
+                      <LucideIcon name="crown" size={24} className="text-amber-300" />
+                    ) : (
+                      <LucideIcon name="plane" size={24} className="text-cyan-300 transform -rotate-45" />
+                    )}
+                  </div>
+                  <div className={`absolute -bottom-1 left-1/2 -translate-x-1/2 w-4 h-1.5 rounded-full blur-[2px] ${
+                    currentTier.isHeaven ? 'bg-amber-400' : 'bg-cyan-400'
+                  }`}></div>
+                </div>
+                <span className={`mt-1.5 px-2 py-0.5 rounded border text-[9px] font-mono shadow ${
+                  currentTier.isHeaven 
+                    ? 'bg-amber-950/90 border-amber-500/60 text-amber-300' 
+                    : 'bg-slate-950/90 border-cyan-500/50 text-cyan-300'
+                }`}>
+                  {currentTier.flightLevel}
+                </span>
+              </div>
+            </div>
+
+            <div className={`md:col-span-7 bg-slate-950/90 border rounded-2xl p-4 font-mono shadow-inner flex flex-col justify-between h-full transition-all ${
+              currentTier.isHeaven ? 'border-amber-500/50 shadow-[0_0_20px_rgba(245,158,11,0.2)]' : 'border-cyan-500/40'
+            }`}>
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-2 text-xs font-bold" style={{ color: currentTier.color }}>
+                    {currentTier.isHeaven ? <LucideIcon name="crown" size={16} className="text-amber-400 animate-pulse" /> : <LucideIcon name="map-pin" size={15} className="shrink-0" />}
+                    <span className="tracking-wide">
+                      {currentTier.isHeaven ? "영광의 최종 도착지:" : "현재 위치 대륙 및 상공:"}
+                    </span>
+                  </div>
+                  <span className="text-[11px] px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700 font-bold">
+                    달성률 {Math.min(100, Math.round(currentProgress))}%
+                  </span>
+                </div>
+
+                <div className="text-lg sm:text-xl font-black text-white tracking-wider pl-5 flex items-center gap-2">
+                  <span>{currentTier.name}</span>
+                  {currentTier.isHeaven && <LucideIcon name="sparkles" size={18} className="text-amber-400" />}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-slate-300 pl-5 mt-2">
+                  <div className="bg-slate-900/80 p-2 rounded-lg border border-slate-800">
+                    <span className="text-slate-500 text-[10px] block">세부 위치 및 상태</span>
+                    <span className="font-semibold text-slate-200">{currentTier.region}</span>
+                  </div>
+                  <div className="bg-slate-900/80 p-2 rounded-lg border border-slate-800">
+                    <span className="text-slate-500 text-[10px] block">위성 GPS 좌표</span>
+                    <span className="font-semibold text-cyan-400">{currentTier.coordinates}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="pl-5 mt-3 pt-2.5 border-t border-slate-800/80 flex items-center justify-between text-xs">
+                <div className="text-cyan-400 flex items-center gap-1.5 font-bold">
+                  <LucideIcon name="navigation" size={13} className="shrink-0" />
+                  <span>다음 경유지: {currentTier.nextWayPoint}</span>
+                </div>
+                <span className="text-[10px] text-slate-500 font-normal">
+                  {selectedContinentId === 'auto' ? 'AUTO-TRACKING' : 'MANUAL LOCK'}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // Main Cockpit App Component
+    function App() {
+      const [metrics, setMetrics] = useState({
+        simple: 0,
+        valid: 0,
+        baptism: 0,
+        attendance: 0,
+        online: 0,
+        prayer: 0,
+      });
+
+      const [section1History, setSection1History] = useState([]);
+      const [onlineHistory, setOnlineHistory] = useState([]);
+      const [prayerHistory, setPrayerHistory] = useState([]);
+
+      const [targets, setTargets] = useState({
+        simple: 25000,
+        valid: 120,
+        baptism: 12,
+        attendance: 12,
+        online: 7500,
+        prayer: 3000,
+      });
+
+      const [selectedContinent, setSelectedContinent] = useState('auto');
+      const [tempContinent, setTempContinent] = useState('auto');
+
+      const [soundEnabled, setSoundEnabled] = useState(true);
+      const [currentTime, setCurrentTime] = useState(new Date());
+      const [showConfigModal, setShowConfigModal] = useState(false);
+      const [tempTargets, setTempTargets] = useState({ ...targets });
+
+      useEffect(() => {
+        const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+        return () => clearInterval(timer);
+      }, []);
+
+      const flightProgress = useMemo(() => {
+        const s = (metrics.simple / targets.simple) * 100;
+        const v = (metrics.valid / targets.valid) * 100;
+        const b = (metrics.baptism / targets.baptism) * 100;
+        const a = (metrics.attendance / targets.attendance) * 100;
+        const o = (metrics.online / targets.online) * 100;
+        const p = (metrics.prayer / targets.prayer) * 100;
+        
+        const avg = (s + v + b + a + o + p) / 6;
+        return Math.min(100, Math.max(0, avg));
+      }, [metrics, targets]);
+
+      const handleAddValue = (key, categoryName, amount) => {
+        if (['simple', 'valid', 'baptism', 'attendance'].includes(key)) {
+          setSection1History((prev) => [
+            {
+              simple: metrics.simple,
+              valid: metrics.valid,
+              baptism: metrics.baptism,
+              attendance: metrics.attendance,
+            },
+            ...prev.slice(0, 19),
+          ]);
+        } else if (key === 'online') {
+          setOnlineHistory((prev) => [metrics.online, ...prev.slice(0, 19)]);
+        } else if (key === 'prayer') {
+          setPrayerHistory((prev) => [metrics.prayer, ...prev.slice(0, 19)]);
+        }
+
+        const nextTotal = metrics[key] + amount;
+
+        if (soundEnabled) {
+          if (flightProgress >= 99) {
+            playCockpitBeep('heaven');
+          } else {
+            playCockpitBeep(amount >= 50 ? 'heavy' : 'click');
+          }
+        }
+
+        setMetrics((prev) => ({
+          ...prev,
+          [key]: nextTotal,
+        }));
+      };
+
+      const handleResetSingle = (key) => {
+        if (['simple', 'valid', 'baptism', 'attendance'].includes(key)) {
+          setSection1History((prev) => [
+            {
+              simple: metrics.simple,
+              valid: metrics.valid,
+              baptism: metrics.baptism,
+              attendance: metrics.attendance,
+            },
+            ...prev.slice(0, 19),
+          ]);
+        } else if (key === 'online') {
+          setOnlineHistory((prev) => [metrics.online, ...prev.slice(0, 19)]);
+        } else if (key === 'prayer') {
+          setPrayerHistory((prev) => [metrics.prayer, ...prev.slice(0, 19)]);
+        }
+
+        if (soundEnabled) playCockpitBeep('heavy');
+        setMetrics((prev) => ({
+          ...prev,
+          [key]: 0,
+        }));
+      };
+
+      const handleResetSection1 = () => {
+        setSection1History((prev) => [
+          {
+            simple: metrics.simple,
+            valid: metrics.valid,
+            baptism: metrics.baptism,
+            attendance: metrics.attendance,
+          },
+          ...prev.slice(0, 19),
+        ]);
+
+        if (soundEnabled) playCockpitBeep('heavy');
+        setMetrics((prev) => ({
+          ...prev,
+          simple: 0,
+          valid: 0,
+          baptism: 0,
+          attendance: 0,
+        }));
+      };
+
+      const handleUndoSection1 = () => {
+        if (section1History.length === 0) return;
+        const [lastState, ...remainingHistory] = section1History;
+        setMetrics((prev) => ({
+          ...prev,
+          simple: lastState.simple,
+          valid: lastState.valid,
+          baptism: lastState.baptism,
+          attendance: lastState.attendance,
+        }));
+        setSection1History(remainingHistory);
+        if (soundEnabled) playCockpitBeep('click');
+      };
+
+      const handleUndoOnline = () => {
+        if (onlineHistory.length === 0) return;
+        const [lastVal, ...remaining] = onlineHistory;
+        setMetrics((prev) => ({ ...prev, online: lastVal }));
+        setOnlineHistory(remaining);
+        if (soundEnabled) playCockpitBeep('click');
+      };
+
+      const handleUndoPrayer = () => {
+        if (prayerHistory.length === 0) return;
+        const [lastVal, ...remaining] = prayerHistory;
+        setMetrics((prev) => ({ ...prev, prayer: lastVal }));
+        setPrayerHistory(remaining);
+        if (soundEnabled) playCockpitBeep('click');
+      };
+
+      const handleResetAll = () => {
+        if (window.confirm("모든 비행 계기판의 누적 데이터를 초기화하시겠습니까?")) {
+          setSection1History((prev) => [
+            {
+              simple: metrics.simple,
+              valid: metrics.valid,
+              baptism: metrics.baptism,
+              attendance: metrics.attendance,
+            },
+            ...prev.slice(0, 19),
+          ]);
+          setOnlineHistory((prev) => [metrics.online, ...prev.slice(0, 19)]);
+          setPrayerHistory((prev) => [metrics.prayer, ...prev.slice(0, 19)]);
+
+          if (soundEnabled) playCockpitBeep('heavy');
+          setMetrics({
+            simple: 0,
+            valid: 0,
+            baptism: 0,
+            attendance: 0,
+            online: 0,
+            prayer: 0,
+          });
+        }
+      };
+
+      const handleOpenConfig = () => {
+        setTempTargets({ ...targets });
+        setTempContinent(selectedContinent);
+        setShowConfigModal(true);
+      };
+
+      const handleSaveTargets = (e) => {
+        e.preventDefault();
+        setTargets({ ...tempTargets });
+        setSelectedContinent(tempContinent);
+        setShowConfigModal(false);
+        if (soundEnabled) playCockpitBeep('click');
+      };
+
+      return (
+        <div className="min-h-screen bg-slate-950 text-slate-100 p-3 sm:p-5 flex flex-col font-sans">
+          <header className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 sm:p-4 mb-4 shadow-2xl backdrop-blur-md flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-cyan-600 to-blue-500 flex items-center justify-center shadow-lg shadow-cyan-500/20 text-slate-950 font-black">
+                <LucideIcon name="plane" size={22} className="text-white transform -rotate-45" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h1 className="text-base sm:text-lg font-black tracking-wider text-white uppercase flex items-center gap-2 font-mono">
+                    선교 항공기 통합 계기판
+                  </h1>
+                  <span className="px-2 py-0.5 text-[9px] font-mono font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 rounded-full animate-pulse">
+                    AUTO-GUIDANCE ACTIVE
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-400 font-mono">
+                  CALLSIGN: GLOBAL-MISSION-777 • HUD GLASS COCKPIT
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-4 bg-slate-950/80 px-3.5 py-1.5 rounded-xl border border-slate-800">
+              <div className="text-center">
+                <span className="text-[9px] font-mono text-slate-500 block">전체 순항률</span>
+                <span className="text-xs sm:text-sm font-bold font-mono text-cyan-400">{flightProgress.toFixed(1)}%</span>
+              </div>
+              <div className="h-6 w-px bg-slate-800"></div>
+              <div className="text-center">
+                <span className="text-[9px] font-mono text-slate-500 block">FLIGHT CLOCK (KST)</span>
+                <span className="text-xs sm:text-sm font-bold font-mono text-amber-400">
+                  {currentTime.toLocaleTimeString('ko-KR', { hour12: false })}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setSoundEnabled(!soundEnabled)}
+                className={`p-2 rounded-xl border transition-all flex items-center justify-center ${
+                  soundEnabled 
+                    ? 'bg-slate-800 text-cyan-400 border-cyan-500/40 shadow-inner' 
+                    : 'bg-slate-900 text-slate-500 border-slate-800'
+                }`}
+                title="사운드 토글"
+              >
+                {soundEnabled ? <LucideIcon name="volume-2" size={16} /> : <LucideIcon name="volume-x" size={16} />}
+              </button>
+              <button
+                onClick={handleOpenConfig}
+                className="flex items-center gap-1 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-mono font-semibold rounded-xl border border-slate-700 transition-all shadow-sm"
+              >
+                <LucideIcon name="settings-2" size={15} />
+                <span>목표치/대륙 설정</span>
+              </button>
+              <button
+                onClick={handleResetAll}
+                className="flex items-center gap-1 px-3 py-2 bg-red-950/50 hover:bg-red-900/60 text-red-300 text-xs font-mono font-semibold rounded-xl border border-red-800/60 transition-all shadow-sm active:scale-95"
+              >
+                <LucideIcon name="trash-2" size={15} />
+                <span>전체 초기화</span>
+              </button>
+            </div>
+          </header>
+
+          <TopPanoramicGlobeViewer currentProgress={flightProgress} selectedContinentId={selectedContinent} />
+
+          <main className="grid grid-cols-1 lg:grid-cols-12 gap-4 flex-1">
+            <section className="lg:col-span-6 bg-slate-950/70 border border-slate-800/90 rounded-3xl p-4 shadow-2xl flex flex-col justify-between">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-2.5 mb-3">
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 shadow-[0_0_8px_#22d3ee]"></span>
+                  <h2 className="text-xs sm:text-sm font-black text-slate-200 tracking-wider font-mono">
+                    전도 계기판
+                  </h2>
+                </div>
+                
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleUndoSection1}
+                    disabled={section1History.length === 0}
+                    title="전도 계기판 직전 상태로 되돌리기"
+                    className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-mono transition-all active:scale-95 border ${
+                      section1History.length > 0
+                        ? 'text-cyan-300 bg-cyan-950/60 border-cyan-800/70 hover:bg-cyan-900/50'
+                        : 'text-slate-600 bg-slate-900/40 border-slate-800 cursor-not-allowed opacity-50'
+                    }`}
+                  >
+                    <LucideIcon name="undo-2" size={11} />
+                    <span>되돌리기</span>
+                  </button>
+
+                  <button
+                    onClick={handleResetSection1}
+                    title="전도 계기판의 4개 지표 일괄 초기화"
+                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-mono text-red-400 bg-red-950/40 border border-red-900/60 hover:bg-red-900/40 transition-all active:scale-95"
+                  >
+                    <LucideIcon name="rotate-ccw" size={10} />
+                    <span>전도 계기판 전체 리셋</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                <SemiCircleGauge
+                  title="단순전도"
+                  subtitle="SIMPLE OUTREACH"
+                  value={metrics.simple}
+                  target={targets.simple}
+                  color="#06b6d4"
+                  unit="회"
+                  iconName="target"
+                  quickSteps={[100, 500, 1000]}
+                  onAdd={(amt) => handleAddValue('simple', '단순전도', amt)}
+                  onReset={() => handleResetSingle('simple')}
+                />
+
+                <SemiCircleGauge
+                  title="유효전도"
+                  subtitle="EFFECTIVE OUTREACH"
+                  value={metrics.valid}
+                  target={targets.valid}
+                  color="#10b981"
+                  unit="명"
+                  iconName="users"
+                  quickSteps={[1, 5, 10]}
+                  onAdd={(amt) => handleAddValue('valid', '유효전도', amt)}
+                  onReset={() => handleResetSingle('valid')}
+                />
+
+                <SemiCircleGauge
+                  title="침례"
+                  subtitle="BAPTISM HARVEST"
+                  value={metrics.baptism}
+                  target={targets.baptism}
+                  color="#6366f1"
+                  unit="명"
+                  iconName="award"
+                  quickSteps={[1, 2, 5]}
+                  onAdd={(amt) => handleAddValue('baptism', '침례', amt)}
+                  onReset={() => handleResetSingle('baptism')}
+                />
+
+                <SemiCircleGauge
+                  title="출석"
+                  subtitle="SUNDAY ATTENDANCE"
+                  value={metrics.attendance}
+                  target={targets.attendance}
+                  color="#f59e0b"
+                  unit="명"
+                  iconName="compass"
+                  quickSteps={[1, 2, 5]}
+                  onAdd={(amt) => handleAddValue('attendance', '출석', amt)}
+                  onReset={() => handleResetSingle('attendance')}
+                />
+              </div>
+
+              <div className="mt-3 pt-2 border-t border-slate-900 flex items-center justify-between text-[10px] font-mono text-slate-500">
+                <span>* 숫자가 누적되면 반원 트랙을 따라 컬러 게이지가 차오릅니다.</span>
+                <span className="text-cyan-400">READY</span>
+              </div>
+            </section>
+
+            <section className="lg:col-span-3">
+              <SpeedometerBar
+                value={metrics.online}
+                target={targets.online}
+                onAdd={(amt) => handleAddValue('online', '온라인선교', amt)}
+                onReset={() => handleResetSingle('online')}
+                onUndo={handleUndoOnline}
+                canUndo={onlineHistory.length > 0}
+              />
+            </section>
+
+            <section className="lg:col-span-3">
+              <FuelGaugeBar
+                value={metrics.prayer}
+                target={targets.prayer}
+                onAdd={(amt) => handleAddValue('prayer', '기도', amt)}
+                onReset={() => handleResetSingle('prayer')}
+                onUndo={handleUndoPrayer}
+                canUndo={prayerHistory.length > 0}
+                soundEnabled={soundEnabled}
+              />
+            </section>
+          </main>
+
+          {showConfigModal && (
+            <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+              <div className="bg-slate-900 border border-slate-700 rounded-2xl p-5 w-full max-w-lg shadow-2xl my-6">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-4">
+                  <div className="flex items-center gap-2 text-cyan-400">
+                    <LucideIcon name="settings-2" size={18} />
+                    <h3 className="text-sm font-bold text-white font-mono">계기판 목표치 & 현재 위치 대륙 설정</h3>
+                  </div>
+                  <button
+                    onClick={() => setShowConfigModal(false)}
+                    className="text-slate-400 hover:text-white text-base font-mono font-bold"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <form onSubmit={handleSaveTargets} className="space-y-4 font-mono text-xs">
+                  <div className="bg-slate-950/90 border border-cyan-500/40 rounded-xl p-3 shadow-inner">
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-cyan-300 font-bold flex items-center gap-1.5 text-xs">
+                        <LucideIcon name="globe-2" size={14} className="text-cyan-400" />
+                        <span>현재 위치 대륙 선택 (6대륙 / 자동)</span>
+                      </label>
+                      <span className="text-[10px] text-slate-400">
+                        {tempContinent === 'auto' ? '진척도 자동 연동 중' : '수동 고정 모드'}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 mb-2">
+                      <button
+                        type="button"
+                        onClick={() => setTempContinent('auto')}
+                        className={`py-1.5 px-2 rounded-lg text-xs font-bold border transition-all text-center ${
+                          tempContinent === 'auto'
+                            ? 'bg-cyan-600 text-slate-950 border-cyan-400 shadow-[0_0_10px_rgba(6,182,212,0.4)]'
+                            : 'bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-600'
+                        }`}
+                      >
+                        🔄 자동 계산
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setTempContinent('asia')}
+                        className={`py-1.5 px-2 rounded-lg text-xs font-bold border transition-all text-center ${
+                          tempContinent === 'asia'
+                            ? 'bg-cyan-500/30 text-cyan-300 border-cyan-400 shadow-[0_0_10px_rgba(6,182,212,0.3)]'
+                            : 'bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-600'
+                        }`}
+                      >
+                        🌏 아시아 (10%)
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setTempContinent('oceania')}
+                        className={`py-1.5 px-2 rounded-lg text-xs font-bold border transition-all text-center ${
+                          tempContinent === 'oceania'
+                            ? 'bg-emerald-500/30 text-emerald-300 border-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.3)]'
+                            : 'bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-600'
+                        }`}
+                      >
+                        🏝️ 오세아니아 (20%)
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setTempContinent('africa')}
+                        className={`py-1.5 px-2 rounded-lg text-xs font-bold border transition-all text-center ${
+                          tempContinent === 'africa'
+                            ? 'bg-yellow-500/30 text-yellow-300 border-yellow-400 shadow-[0_0_10px_rgba(234,179,8,0.3)]'
+                            : 'bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-600'
+                        }`}
+                      >
+                        🌍 아프리카 (40%)
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setTempContinent('south_america')}
+                        className={`py-1.5 px-2 rounded-lg text-xs font-bold border transition-all text-center ${
+                          tempContinent === 'south_america'
+                            ? 'bg-blue-500/30 text-blue-300 border-blue-400 shadow-[0_0_10px_rgba(59,130,246,0.3)]'
+                            : 'bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-600'
+                        }`}
+                      >
+                        🌎 남아메리카 (60%)
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setTempContinent('north_america')}
+                        className={`py-1.5 px-2 rounded-lg text-xs font-bold border transition-all text-center ${
+                          tempContinent === 'north_america'
+                            ? 'bg-pink-500/30 text-pink-300 border-pink-400 shadow-[0_0_10px_rgba(236,72,153,0.3)]'
+                            : 'bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-600'
+                        }`}
+                      >
+                        🗽 북아메리카 (80%)
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setTempContinent('europe')}
+                        className={`py-1.5 px-2 rounded-lg text-xs font-bold border transition-all text-center ${
+                          tempContinent === 'europe'
+                            ? 'bg-purple-500/30 text-purple-300 border-purple-400 shadow-[0_0_10px_rgba(168,85,247,0.3)]'
+                            : 'bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-600'
+                        }`}
+                      >
+                        🏰 유럽 (90%)
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setTempContinent('heaven')}
+                        className={`py-1.5 px-2 rounded-lg text-xs font-bold border transition-all text-center ${
+                          tempContinent === 'heaven'
+                            ? 'bg-amber-500/30 text-amber-300 border-amber-400 shadow-[0_0_10px_rgba(245,158,11,0.4)]'
+                            : 'bg-slate-900 text-slate-300 border-slate-800 hover:border-slate-600'
+                        }`}
+                      >
+                        👑 천국 입성 (100%)
+                      </button>
+                    </div>
+
+                    <select
+                      value={tempContinent}
+                      onChange={(e) => setTempContinent(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-cyan-500"
+                    >
+                      <option value="auto">🔄 자동 연동 (종합 비행 진척도 기준)</option>
+                      <option value="asia">🌏 아시아 대륙 (Asia - 10%)</option>
+                      <option value="oceania">🏝️ 오세아니아 대륙 (Oceania - 20%)</option>
+                      <option value="africa">🌍 아프리카 대륙 (Africa - 40%)</option>
+                      <option value="south_america">🌎 남아메리카 대륙 (South America - 60%)</option>
+                      <option value="north_america">🗽 북아메리카 대륙 (North America - 80%)</option>
+                      <option value="europe">🏰 유럽 대륙 (Europe - 90%)</option>
+                      <option value="heaven">👑 천국 입성 (Heaven Entry - 100%)</option>
+                      <option value="base">🛫 본부 기지 (Departure Base - 0%)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <span className="text-slate-400 text-[11px] block mb-2 font-bold">각 지표별 최대 기준 목표치 (Scale)</span>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                      <div>
+                        <label className="text-slate-300 block mb-1">단순전도 목표</label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={tempTargets.simple}
+                          onChange={(e) => setTempTargets({ ...tempTargets, simple: parseInt(e.target.value) || 1 })}
+                          className="w-full bg-slate-950 border border-slate-700 rounded px-2.5 py-1.5 text-white focus:border-cyan-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-300 block mb-1">유효전도 목표</label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={tempTargets.valid}
+                          onChange={(e) => setTempTargets({ ...tempTargets, valid: parseInt(e.target.value) || 1 })}
+                          className="w-full bg-slate-950 border border-slate-700 rounded px-2.5 py-1.5 text-white focus:border-cyan-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-300 block mb-1">침례 목표</label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={tempTargets.baptism}
+                          onChange={(e) => setTempTargets({ ...tempTargets, baptism: parseInt(e.target.value) || 1 })}
+                          className="w-full bg-slate-950 border border-slate-700 rounded px-2.5 py-1.5 text-white focus:border-cyan-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-300 block mb-1">출석 목표</label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={tempTargets.attendance}
+                          onChange={(e) => setTempTargets({ ...tempTargets, attendance: parseInt(e.target.value) || 1 })}
+                          className="w-full bg-slate-950 border border-slate-700 rounded px-2.5 py-1.5 text-white focus:border-cyan-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-300 block mb-1">온라인선교 목표</label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={tempTargets.online}
+                          onChange={(e) => setTempTargets({ ...tempTargets, online: parseInt(e.target.value) || 1 })}
+                          className="w-full bg-slate-950 border border-slate-700 rounded px-2.5 py-1.5 text-white focus:border-cyan-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-slate-300 block mb-1">기도 연료 목표</label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={tempTargets.prayer}
+                          onChange={(e) => setTempTargets({ ...tempTargets, prayer: parseInt(e.target.value) || 1 })}
+                          className="w-full bg-slate-950 border border-slate-700 rounded px-2.5 py-1.5 text-white focus:border-cyan-500"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2 justify-end pt-3 border-t border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => setShowConfigModal(false)}
+                      className="px-3 py-1.5 rounded bg-slate-800 text-slate-300 hover:bg-slate-700"
+                    >
+                      취소
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-4 py-1.5 rounded bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-bold shadow"
+                    >
+                      저장 적용
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
